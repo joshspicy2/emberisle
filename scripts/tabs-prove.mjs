@@ -216,7 +216,11 @@ try {
     });
   }
   await a.page.getByRole("button", { name: "Start" }).click();
-  let vs = await synced(tabs, -1, "start");
+  // #951: four 1280×720 islands under software GL on a busy CI runner often need longer than the
+  // default 10 s for every tab to mount the started game. Wait for the real condition (identical
+  // shared state on all tabs) with the same 90 s bound already used for the cold first roll; do
+  // not loosen any later assertion.
+  let vs = await synced(tabs, -1, "start", 90_000);
   for (const t of tabs) {
     if (!(await t.page.evaluate(() => window.__dockFrame))) throw new Error(`${t.name}: the chat dock missed the HUD's first frame`);
   }

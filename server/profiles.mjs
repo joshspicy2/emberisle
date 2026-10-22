@@ -62,13 +62,23 @@ export function ownerView(p) {
   };
 }
 
+// What a table sees of a profile bound to a seat (#764): the opaque id and display name, nothing else.
+export function seatView(p) {
+  return { profileId: p.id, displayName: p.displayName };
+}
+
+// The public card a table may ask for (#764). No login, colours, devices, budgets or media bindings.
+export function publicCard(p) {
+  return { profileId: p.id, displayName: p.displayName, catchphrase: p.catchphrase };
+}
+
 // Logins are player-chosen keys ("constructor" is a valid one), so every map lookup reads own properties only.
 const has = (o, k) => Object.hasOwn(o, k);
 const own = (o, k) => (Object.hasOwn(o, k) ? o[k] : undefined);
 const plain = (v) => v !== null && typeof v === "object" && !Array.isArray(v) && Object.getPrototypeOf(v) === Object.prototype;
 const isTime = (v) => Number.isSafeInteger(v) && v >= 0;
 const isStr = (v, max) => typeof v === "string" && Array.from(v).length <= max;
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+export const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 function validGuard(g) {
   return plain(g) && Array.isArray(g.times) && g.times.every(isTime) && plain(g.pending) && Object.values(g.pending).every(isTime) && Number.isSafeInteger(g.lifetime) && g.lifetime >= 0;

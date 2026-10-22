@@ -33,7 +33,7 @@
     {
       "id": "tabs-prove-4",
       "pattern": "FAIL timed out: start\\n",
-      "issue": 860
+      "issue": 951
     },
     {
       "id": "board-touch-prove",
