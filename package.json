@@ -115,6 +115,7 @@
     "make-icons": "node scripts/make-icons.mjs",
     "board-look-prove": "node scripts/board-look-prove.mjs",
     "seat-rail-prove": "node scripts/seat-rail-prove.mjs",
+    "practice-label-prove": "node scripts/practice-label-prove.mjs",
     "longest-army-prove": "node scripts/longest-army-prove.mjs",
     "roll-log-prove": "node scripts/roll-log-prove.mjs",
     "public-score-prove": "node --import ./server/register.mjs scripts/public-score-prove.mjs",

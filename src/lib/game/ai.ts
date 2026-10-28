@@ -198,12 +198,13 @@ export function chooseRecoveryAction(state: GameState, pid: string): Action | nu
 
 // Goods events already have a canonical public voice. Annotate only automation of
 // non-goods setup/roll-off/pass events so idle recovery remains attributable.
-export function logBotAction(before: GameState, after: GameState, action: Action, _pid: string, seatName: string): GameState {
+export function logBotAction(before: GameState, after: GameState, action: Action, _pid: string, seatName: string, who = "Bot"): GameState {
+  // `who` is "Practice bot" in a practice game (#562); online idle takeover keeps "Bot" because it acts for a human seat.
   const replace = (line: string) => {
-    if (action.type === "roll" && before.phase === "rollOff") return line.replace(/^.+ rolls a (\d+)\.$/, `Bot rolled for ${seatName}: roll-off die $1.`);
-    if (action.type === "setupSettle" && before.setupIndex < before.players.length) return line.replace(/^.+ raises an outpost\.$/, `Bot built an outpost for ${seatName}.`);
-    if (action.type === "setupRoad") return line.replace(/^.+ lays a path\.$/, `Bot built a path for ${seatName}.`);
-    if (action.type === "endTurn" && /'s turn\.$/.test(line)) return `Bot passed for ${seatName}; ${line}`;
+    if (action.type === "roll" && before.phase === "rollOff") return line.replace(/^.+ rolls a (\d+)\.$/, `${who} rolled for ${seatName}: roll-off die $1.`);
+    if (action.type === "setupSettle" && before.setupIndex < before.players.length) return line.replace(/^.+ raises an outpost\.$/, `${who} built an outpost for ${seatName}.`);
+    if (action.type === "setupRoad") return line.replace(/^.+ lays a path\.$/, `${who} built a path for ${seatName}.`);
+    if (action.type === "endTurn" && /'s turn\.$/.test(line)) return `${who} passed for ${seatName}; ${line}`;
     return line;
   };
   let overlap = Math.min(before.log.length, after.log.length);

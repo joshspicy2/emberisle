@@ -485,6 +485,8 @@ jobs:
         run: npm run dock-piles-many-seeds-prove
       - if: needs.changes.outputs.docs_only != 'true' && matrix.suite == 'flows-c'
         run: npm run seat-rail-prove
+      - if: needs.changes.outputs.docs_only != 'true' && matrix.suite == 'flows-c'
+        run: npm run practice-label-prove
       - if: needs.changes.outputs.docs_only != 'true' && matrix.suite == 'flows-a'
         run: npm run longest-army-prove
       - if: needs.changes.outputs.docs_only != 'true' && matrix.suite == 'presentation-2'

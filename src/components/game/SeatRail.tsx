@@ -63,6 +63,23 @@ function Tally({ testid, Icon, n, name, held }: { testid: string; Icon: LucideIc
   );
 }
 
+// #562: a practice bot's persistent label. The desktop rail spells "Practice" on the tally line. A phone cell has no room on
+// either line without squeezing the short name, so the strip pins a compact "P" (12 px text) to the card's top corner,
+// clear of the name and the points. Its accessible name and title are the word. It claims nothing about strength.
+function PracticeMark({ strip }: { strip: boolean }) {
+  return (
+    <span
+      data-testid="practice-label"
+      role="img"
+      aria-label="Practice"
+      title="Practice"
+      className={cn("shrink-0 rounded-full bg-zinc-200 font-medium text-zinc-800 ring-1 ring-zinc-400", strip ? "pointer-events-none absolute -top-2.5 right-1 grid size-4 place-items-center text-xs leading-none" : "ml-auto px-1 text-xs leading-4")}
+    >
+      <span aria-hidden="true">{strip ? "P" : "Practice"}</span>
+    </span>
+  );
+}
+
 // `short` is the strip's under-100 px form (#420); its presence makes this a strip line, which also hides the counts in
 // a cell under 200 px so the name keeps its room. A dropped seat's marker shows at every width (the word only where it fits).
 function SeatLine({ p, actor, short }: { p: PlayerState; actor: string; short?: string }) {
@@ -74,6 +91,8 @@ function SeatLine({ p, actor, short }: { p: PlayerState; actor: string; short?: 
   const fortunes = p.fortunes ?? hiddenCount(p);
   const narrow = strip ? "@max-[200px]:hidden" : undefined;
   const path = useMemo(() => roadLength(state, p.id), [state, p.id]);
+  // #562: practice bot seats only (never an online or hotseat seat, even a host-run bot online).
+  const practice = useGame((s) => s.mode === "ai") && p.kind === "bot";
   return (
     <>
       <span className={cn("flex w-full items-center", strip ? "gap-1.5 @max-[100px]:gap-1 @max-[100px]:has-[.seat-away]:gap-0.5 @max-[72px]:has-[.seat-away]:gap-0" : "gap-1.5")}>
@@ -120,6 +139,7 @@ function SeatLine({ p, actor, short }: { p: PlayerState; actor: string; short?: 
       <span className="flex w-full items-center gap-1 text-caption">
         <Tally testid="tally-path" Icon={Route} n={path} name={["Path length", "Longest path"]} held={state.longestRoad === p.id} />
         <Tally testid="tally-army" Icon={Swords} n={p.knightsPlayed} name={["Wayfarers played", "Largest army"]} held={state.largestArmy === p.id} />
+        {practice ? <PracticeMark strip={strip} /> : null}
       </span>
     </>
   );
