@@ -11,7 +11,8 @@ import { createGame } from "../src/lib/game/board.ts";
 import { chooseBotAction, chooseTradeAsk } from "../src/lib/game/ai.ts";
 import { applyAction, legalRoads, stealTargets } from "../src/lib/game/rules.ts";
 import { RESOURCES } from "../src/lib/game/types.ts";
-import { createPresentationFeed, projectAction } from "../src/lib/game/bot-presentation.ts";
+import { createPresentationFeed } from "../src/lib/game/bot-presentation.ts";
+import { projectAction } from "../src/lib/game/bot-projection.ts";
 import { committedChanges, createCommitObserver } from "../src/lib/net/commit-observer.ts";
 import { presentation, useGame } from "../src/lib/game/store.ts";
 
@@ -63,8 +64,10 @@ const bot = (game, id) => game.players.find((p) => p.id === id);
   assert.equal(useGame.getState().dispatch({ type: "buildPath", edgeId: taken }).ok, false);
   assert.equal(useGame.getState().dispatch({ type: "buildOutpost", vertexId: game.vertices[0].id }).ok, false);
   assert.equal(useGame.getState().dispatch({ type: "buyCard" }, "p2").ok, false, "not p2's turn");
+  await presentation.flush();
   assert.equal(seen.length, 0, "refused actions emit nothing");
   assert.equal(useGame.getState().dispatch({ type: "endTurn" }).ok, true);
+  await presentation.flush();
   assert.equal(seen.length, 0, "a pass emits nothing");
   const s = useGame.getState().state;
   assert.equal(projectAction(s, s, "p1", { type: "buyCard" }), null, "an unchanged state reads as refused");
@@ -79,6 +82,7 @@ const bot = (game, id) => game.players.find((p) => p.id === id);
   practice(game, "p0");
   const edge = legalRoads(game, "p0", false)[0];
   assert.equal(useGame.getState().dispatch({ type: "buildPath", edgeId: edge }).ok, true);
+  await presentation.flush();
   assert.equal(seen.length, 1);
   assert.equal(seen[0].controller, "human");
   assert.deepEqual([seen[0].kind, seen[0].actor, seen[0].edges, seen[0].via], ["path", "p0", [edge], "build"]);
@@ -90,6 +94,7 @@ const bot = (game, id) => game.players.find((p) => p.id === id);
   const chosen = chooseBotAction(g2, "p1");
   assert.equal(chosen.type, "buildPath");
   useGame.getState().runBots();
+  await presentation.flush();
   assert.equal(seen.length, 1);
   assert.deepEqual([seen[0].kind, seen[0].actor, seen[0].controller, seen[0].edges, seen[0].ordered, seen[0].source], ["path", "p1", "bot", [chosen.edgeId], true, "practice"]);
   assert.match(seen[0].id, /^\d+\.1$/);
@@ -146,6 +151,7 @@ const bot = (game, id) => game.players.find((p) => p.id === id);
   assert.equal(chosen.edgeIds.length, 2);
   practice(g, "p2");
   useGame.getState().runBots();
+  await presentation.flush();
   assert.equal(seen.length, 1);
   assert.deepEqual([seen[0].kind, seen[0].via, seen[0].edges, seen[0].ordered, seen[0].controller], ["path", "fortune", chosen.edgeIds, true, "bot"]);
   console.log("PASS: runBots' two-path fortune is one ordered event with both edges in the bot's order");
@@ -161,6 +167,7 @@ const bot = (game, id) => game.players.find((p) => p.id === id);
   practice(game, "p1");
   assert.equal(chooseBotAction(game, "p1").type, "buyCard");
   useGame.getState().runBots();
+  await presentation.flush();
   assert.equal(bot(useGame.getState().state, "p1").hidden[top], 1, "the bot really drew the top card");
   assert.equal(seen.length, 1);
   assert.deepEqual(Object.keys(seen[0]).sort(), ["actor", "controller", "epoch", "id", "kind", "ordered", "seq", "source"]);
@@ -175,6 +182,7 @@ const bot = (game, id) => game.players.find((p) => p.id === id);
   balance(d);
   practice(d, "p0");
   useGame.getState().runBots();
+  await presentation.flush();
   assert.equal(seen.length, 1);
   assert.deepEqual([seen[0].kind, seen[0].actor, seen[0].count], ["discard", "p2", 4]);
   assert.doesNotMatch(JSON.stringify(seen[0]), PRIVATE);
@@ -192,6 +200,7 @@ const bot = (game, id) => game.players.find((p) => p.id === id);
   assert(r, "fixture where the bot steals");
   practice(r.g, "p1");
   useGame.getState().runBots();
+  await presentation.flush();
   assert.equal(seen.length, 1);
   assert.deepEqual([seen[0].kind, seen[0].hex, seen[0].victim, seen[0].via], ["wayfarer", r.a.hexId, r.a.stealFrom, "move"]);
   assert.doesNotMatch(JSON.stringify(seen[0]), PRIVATE);
@@ -210,13 +219,16 @@ const bot = (game, id) => game.players.find((p) => p.id === id);
   assert(ask, "p2 asks the table");
   practice(game, "p2");
   useGame.getState().runBots();
+  await presentation.flush();
   const tradeId = useGame.getState().offer?.tradeId;
   assert(tradeId);
   assert.equal(seen.length, 1);
   assert.deepEqual([seen[0].kind, seen[0].tradeId, seen[0].actor, seen[0].controller, seen[0].give, seen[0].want], ["offer", tradeId, "p2", "bot", ask.give, ask.want]);
-  useGame.getState().runBots(); // the bot's turn waits on its open ask: no second offer
+  useGame.getState().runBots();
+  await presentation.flush(); // the bot's turn waits on its open ask: no second offer
   assert.equal(seen.length, 1);
   useGame.getState().answerTrade(true);
+  await presentation.flush();
   assert.equal(seen.length, 2);
   assert.deepEqual([seen[1].kind, seen[1].tradeId, seen[1].actor, seen[1].taker], ["trade", tradeId, "p2", "p0"]);
 
@@ -225,6 +237,7 @@ const bot = (game, id) => game.players.find((p) => p.id === id);
   balance(h);
   practice(h, "p0");
   useGame.getState().askTable({ grain: 1 }, { wool: 1 });
+  await presentation.flush();
   assert.equal(seen.length, 1);
   assert.deepEqual([seen[0].kind, seen[0].actor, seen[0].controller], ["offer", "p0", "human"]);
   useGame.getState().goTitle(); // clears the practice offer timers
@@ -341,21 +354,39 @@ const bot = (game, id) => game.players.find((p) => p.id === id);
   console.log("PASS: online baselines, duplicate/stale pushes, repeated/truncated logs, reconnect, rematch and trade duplicates");
 }
 
-// 7. No observer changes the game: the same runBots step with a throwing listener and with none.
+// 7. No observer changes or delays the game: the commit is in the store before any event, and the same runBots step
+// with a throwing listener leaves exactly what it leaves with none. A capture queued before a reset is dropped.
 {
-  const run = (listen) => {
+  const run = async (listen) => {
     const game = setup(4);
     bot(game, "p1").resources = { ...EMPTY, timber: 1, clay: 1 };
     balance(game);
     practice(game, "p1");
-    const off = listen ? presentation.subscribe(() => { throw new Error("listener"); }) : () => {};
+    const atEvent = [];
+    const off = presentation.subscribe(() => {
+      atEvent.push(useGame.getState().state.seq);
+      if (listen) throw new Error("listener");
+    });
+    const before = game.seq;
     useGame.getState().runBots();
+    assert.equal(useGame.getState().state.seq, before + 1, "the commit lands synchronously");
+    assert.equal(seen.length, 0, "no event before the commit is set");
+    await presentation.flush();
     off();
+    assert.deepEqual(atEvent, [before + 1], "the event reads an already committed state");
     const s = useGame.getState();
     return JSON.stringify({ state: s.state, log: s.gameLog.map((l) => l.text), offer: s.offer, error: s.error });
   };
-  assert.equal(run(true), run(false));
-  useGame.getState().goTitle();
-  console.log("PASS: a throwing listener leaves the committed state, log and offer exactly as with no listener");
+  assert.equal(await run(true), await run(false));
+
+  const game = setup(4);
+  bot(game, "p1").resources = { ...EMPTY, timber: 1, clay: 1 };
+  balance(game);
+  practice(game, "p1");
+  useGame.getState().runBots();
+  useGame.getState().goTitle(); // a new epoch before the queued capture is projected
+  await presentation.flush();
+  assert.equal(seen.length, 0, "a capture from a reset epoch is dropped");
+  console.log("PASS: events follow the commit, a throwing listener changes nothing, and a reset drops queued captures");
 }
 console.log("bot presentation event prove ok");

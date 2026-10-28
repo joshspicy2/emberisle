@@ -1,4 +1,4 @@
 {
   "LobbyView": 2300,"index": 122100, "IslandCanvas": 199000, "jelly-board": 7600, "hex-jelly": 46800, "harbor-jelly": 9800, "online": 8000, "Reactions": 2310, "sheets": 6800, "moments": 4900, "VictoryTargetSelect": 690, "DockInspection": 1030, "HandRates": 640, "TurnExtensionVote": 1200, "SetupReference": 1860, "haptics": 1090, "OpenTables": 700, "WayfarerOptions": 350,
-  "table": 2000, "sound-extra": 203, "trade-sound": 468, "emotes": 371
+  "table": 2000, "sound-extra": 203, "trade-sound": 468, "emotes": 371, "bot-projection": 1006, "commit-observer": 1126
 }

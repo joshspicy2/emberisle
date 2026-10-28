@@ -5,6 +5,7 @@
 // controller is "bot" only for a bot seat. Only board pieces, the wayfarer's hex and fortune counts are read, all of
 // which every seat already sees; hands are never read. The observer only reads: it never dispatches or delays a state.
 import type { BatchedChange, Bag, Controller, EventBody, PresentationFeed } from "@/lib/game/bot-presentation";
+import { emit } from "@/lib/game/bot-projection";
 import type { GameState } from "@/lib/game/types";
 
 type Change = BatchedChange & { owner: string | null; setup?: boolean };
@@ -78,7 +79,7 @@ export function createCommitObserver(feed: PresentationFeed) {
       const changes = committedChanges(before, next);
       if (changes.length === 1) {
         const c = changes[0]!;
-        const e = feed.emit(`state:${next.seq}:${c.owner}`, single(c), { source: "online", actor: c.owner, controller: controllerOf(c.owner, next), ordered: true, seq: next.seq });
+        const e = emit(feed, `state:${next.seq}:${c.owner}`, single(c), { source: "online", actor: c.owner, controller: controllerOf(c.owner, next), ordered: true, seq: next.seq });
         return e ? [e] : [];
       }
       const owners = [...new Set(changes.map((c) => c.owner))];
@@ -88,7 +89,7 @@ export function createCommitObserver(feed: PresentationFeed) {
           .filter((c) => c.owner === owner)
           .map(({ kind, id }) => ({ kind, id }))
           .sort((a, b) => (a.kind === b.kind ? (a.id < b.id ? -1 : a.id > b.id ? 1 : 0) : a.kind < b.kind ? -1 : 1));
-        const e = feed.emit(`state:${next.seq}:${owner}`, { kind: "summary", changes: mine }, { source: "online", actor: owner, controller: controllerOf(owner, next), ordered: false, seq: next.seq });
+        const e = emit(feed, `state:${next.seq}:${owner}`, { kind: "summary", changes: mine }, { source: "online", actor: owner, controller: controllerOf(owner, next), ordered: false, seq: next.seq });
         if (e) events.push(e);
       }
       return events;
@@ -96,13 +97,15 @@ export function createCommitObserver(feed: PresentationFeed) {
     // `tradeOffer`: one event per real trade id, however often the host's message repeats.
     offer(msg: { tradeId: string; from: string; give: Bag; want: Bag }) {
       if (!offers.has(msg.tradeId)) offers.set(msg.tradeId, { from: msg.from, give: msg.give, want: msg.want });
-      return feed.offer("online", msg.tradeId, msg.from, msg.give, msg.want, controllerOf(msg.from, prev), prev?.seq ?? 0);
+      const { tradeId, from, give, want } = msg;
+      return emit(feed, `offer:${tradeId}`, { kind: "offer", tradeId, give, want }, { source: "online", actor: from, controller: controllerOf(from, prev), ordered: true, seq: prev?.seq ?? 0 });
     },
     // `tradeClosed` with a taker: the offer's goods changed hands. A close for an offer this tab never saw says nothing.
     closed(msg: { tradeId: string; taker?: string }) {
       const o = offers.get(msg.tradeId);
       if (!o || !msg.taker) return null;
-      return feed.trade("online", msg.tradeId, o.from, msg.taker, o.give, o.want, controllerOf(o.from, prev), prev?.seq ?? 0);
+      const { tradeId, taker } = msg;
+      return emit(feed, `trade:${tradeId}`, { kind: "trade", tradeId, taker, give: o.give, want: o.want }, { source: "online", actor: o.from, controller: controllerOf(o.from, prev), ordered: true, seq: prev?.seq ?? 0 });
     },
     // Leaving the table: the next push is a fresh baseline in a new epoch.
     reset() {
