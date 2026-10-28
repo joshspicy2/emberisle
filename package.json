@@ -23,6 +23,7 @@
     "profile-expiry-prove": "node server/profile-expiry-prove.mjs",
     "profile-pin-race-prove": "node server/profile-pin-race-prove.mjs",
     "bot-harbor-prove": "node --import ./server/register.mjs server/bot-harbor-prove.mjs",
+    "bot-presentation-event-prove": "node --import ./server/register.mjs scripts/bot-presentation-event-prove.mjs",
     "client-prove": "node scripts/client-prove.mjs",
     "dock-rates-prove": "node scripts/dock-rates-prove.mjs",
     "hotseat-prove": "node scripts/hotseat-prove.mjs",

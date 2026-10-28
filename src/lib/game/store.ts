@@ -206,6 +206,8 @@ function withPaths(state: GameState, edgeIds: string[], pid: string): GameState 
   return { ...state, edges: state.edges.map((e) => (edgeIds.includes(e.id) ? { ...e, path: pid } : e)) };
 }
 import { chooseBotAction, chooseTradeAsk, shouldAcceptTrade } from "./ai";
+import { createPresentationFeed } from "./bot-presentation";
+import { createCommitObserver } from "@/lib/net/commit-observer";
 import { PLAYER_COLORS, RESOURCES, type Action, type BuildMode, type GameState, type VictoryTarget, type WayfarerMode } from "./types";
 import type { Bag, ChatLine, Legal, Me, Reaction, Seat, TableClient } from "@/lib/net/table";
 import { chunk } from "@/lib/lazy";
@@ -218,6 +220,12 @@ import type { WaterPath, WaterStatus } from "@/lib/scene/crystal-water";
 import type { PlayView } from "@/lib/scene/mobile-fit";
 
 const tradeSounds = import("../trade-sound");
+
+// Bot action moments (#608, #720): presentation-only events read after each commit. They never dispatch or delay a state.
+export const presentation = createPresentationFeed();
+const commits = createCommitObserver(presentation);
+const controllerOf = (state: GameState | null, id: string): "bot" | "human" =>
+  state?.players.find((p) => p.id === id)?.kind === "bot" ? "bot" : "human";
 
 // The ask-the-table offer every seat is looking at (docs/BUILD_BIBLE.md 4.4). `until` is when the host's 20 s run out.
 export interface OpenOffer {
@@ -580,6 +588,7 @@ export const useGame = create<GameStore>((set, get) => ({
     clearOfferTimers();
     botAsked = "";
     botDeclined.clear();
+    commits.reset();
     const name = get().commitName();
     const state = createGame({ humans: [{ name }], bots: 3, wayfarerMode: get().wayfarerChoices.ai ?? "on" });
     set({
@@ -610,6 +619,7 @@ export const useGame = create<GameStore>((set, get) => ({
     clearOfferTimers();
     botAsked = "";
     botDeclined.clear();
+    commits.reset();
     const humans = Array.from({ length: count }, (_, i) => ({
       name: i === 0 ? get().commitName() : `Seat ${i + 1}`,
     }));
@@ -662,6 +672,7 @@ export const useGame = create<GameStore>((set, get) => ({
     clearOfferTimers();
     botAsked = "";
     botDeclined.clear();
+    commits.reset();
     get().net?.close();
     set({
       screen: "title",
@@ -721,6 +732,8 @@ export const useGame = create<GameStore>((set, get) => ({
       : res.state;
     set({ state: nextState, gameLog: appendLog(get().gameLog, newLog(state.log, nextState.log)), error: null, announcement: null, toast: null, buildMode: "none", roadPicks: [] });
     hear(state, nextState, localId, mode);
+    // Read after the commit: the event cannot hold back or change this state.
+    presentation.practice(state, nextState, actor, action, automated ? "bot" : "human");
     // An offer lives only while its asker still has the turn in `main` and still holds the offered goods (as host.mjs play).
     const open = get().offer;
     if (open) {
@@ -938,6 +951,7 @@ export const useGame = create<GameStore>((set, get) => ({
     const winner = state.players.find((p) => p.id === state.winner)!;
     const ordered = [winner, ...state.players.filter((p) => p !== winner)];
     const next = createGame({ humans: ordered.map((p) => ({ name: p.name })), bots: 0, winnerFirst: true, wayfarerMode: state.wayfarerMode ?? "on" });
+    commits.reset();
     set({
       state: next,
       localId: "p0",
@@ -1058,6 +1072,7 @@ function openOffer(set: Set, get: Get, from: string, give: Bag, want: Bag) {
   const tradeId = `t${state.seq}-${++offerSeq}`;
   const fromName = state.players.find((p) => p.id === from)?.name ?? "Someone";
   set({ offer: { tradeId, from, fromName, give, want, until: Date.now() + OFFER_MS }, declined: [], tradeOutcome: null, tradeTaker: null });
+  presentation.offer("practice", tradeId, from, give, want, controllerOf(state, from), state.seq);
   const me = get().localId;
   void tradeSounds.then(({ offerChime }) => offerChime(play, from, fromName, me, give, want));
   offerTimers.push(setTimeout(() => endOffer(set, get, null), OFFER_MS));
@@ -1116,6 +1131,7 @@ function respond(set: Set, get: Get, actor: string, yes: boolean): string | null
   if (accepted.error) return accepted.error;
   const tradeLines = newLog(state.log, accepted.state.log).filter((line) => !line.includes(" offers a trade to "));
   set({ state: { ...accepted.state, log: [...state.log, ...tradeLines].slice(-200) }, gameLog: appendLog(gameLog, tradeLines) });
+  presentation.trade("practice", offer.tradeId, offer.from, actor, offer.give, offer.want, controllerOf(state, offer.from), accepted.state.seq);
   endOffer(set, get, actor);
   return null;
 }
@@ -1239,6 +1255,8 @@ async function connect(set: Set, get: Get, first: (t: TableClient, me: Me) => vo
       const rollOff = rollOffLine(get().state, game);
       // hear first: it is what claims a match point, and the banner line is read off that claim on this same state.
       hear(get().state, game, me, "online", firstState);
+      // A welcome's first state is a silent baseline for the bot moments.
+      commits.state(game, firstState);
       const swing = awardLine(get().state, game) ?? takeMatchPointLine();
       // The deadline moves onto this clock by the skew the message shows, so a phone minutes off still counts true.
       // Every push carries the same window, and the skew wobbles by however long this tab took to get to the message:
@@ -1267,6 +1285,7 @@ async function connect(set: Set, get: Get, first: (t: TableClient, me: Me) => vo
     tradeOffer: ({ tradeId, from, give, want, seconds }) => {
       const fromName = get().state?.players.find((p) => p.id === from)?.name ?? "Someone";
       set({ offer: { tradeId, from, fromName, give, want, until: Date.now() + seconds * 1000 }, declined: [], tradeOutcome: null, tradeTaker: null });
+      commits.offer({ tradeId, from, give, want });
       const me = get().localId;
       void tradeSounds.then(({ offerChime }) => offerChime(play, from, fromName, me, give, want));
     },
@@ -1275,6 +1294,7 @@ async function connect(set: Set, get: Get, first: (t: TableClient, me: Me) => vo
       if (offer?.tradeId === tradeId && !declined.includes(by)) set({ declined: [...declined, by] });
     },
     tradeClosed: ({ tradeId, taker }) => {
+      commits.closed({ tradeId, taker });
       if (get().offer?.tradeId === tradeId) endOffer(set, get, taker ?? null);
     },
     error: (message) => {
