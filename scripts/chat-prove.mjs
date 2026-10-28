@@ -759,9 +759,38 @@ try {
   await c.page.evaluate((text) => window.__emberisle.getState().sendChat(text), mutedLine);
   await a.page.waitForFunction((text) => window.__emberisle.getState().chat.some((line) => line.text === text), mutedLine);
   check((await a.page.getByTestId("chat-log").locator("li").filter({ hasText: mutedLine }).count()) === 0, "mute: Pine's chat line is hidden only in Ember's view");
-  await a.page.getByRole("button", { name: "Unmute player Pine", exact: true }).click();
+  await a.page.getByRole("button", { name: "Mute player Pine", exact: true }).click();
   await a.page.getByTestId("chat-log").locator("li").filter({ hasText: mutedLine }).waitFor();
   check(true, "mute: unmuting Pine restores the earlier chat line");
+
+  // #520: the seat button keeps one name and says its state with aria-pressed (no flipping label as well); the panel closes on
+  // Escape (focus back on the toggle) and on a press outside; Escape closes only the topmost layer.
+  const muteToggle = a.page.getByRole("button", { name: "Mute players", exact: true });
+  const mutePanel = a.page.getByTestId("chat-mute-panel");
+  check((await mute.getAttribute("aria-label")) === "Mute player Pine" && (await mute.getAttribute("aria-pressed")) === "false", "mute panel: Pine's button is named \"Mute player Pine\" with aria-pressed false while unmuted");
+  await mute.click();
+  check((await mute.getAttribute("aria-label")) === "Mute player Pine" && (await mute.getAttribute("aria-pressed")) === "true", "mute panel: the name is unchanged and aria-pressed is true once muted");
+  await mute.click();
+  await mute.focus();
+  await a.page.keyboard.press("Escape");
+  check((await mutePanel.count()) === 0, "mute panel: Escape closes it");
+  check(await muteToggle.evaluate((el) => el === document.activeElement), "mute panel: Escape returns focus to the Mute toggle");
+  check((await a.page.getByRole("button", { name: "Minimize chat" }).count()) === 1, "mute panel: Escape closed only the panel; the chat stays open");
+  await muteToggle.click();
+  await mutePanel.waitFor();
+  await a.page.getByTestId("chat-log").click({ position: { x: 4, y: 4 } });
+  check((await mutePanel.count()) === 0, "mute panel: a press outside closes it");
+  // Escape order over an armed build: the first Escape closes the panel, the second disarms the build.
+  await a.page.evaluate(() => window.__emberisle.getState().setBuildMode("path"));
+  await muteToggle.click();
+  await mutePanel.waitFor();
+  await mute.focus();
+  await a.page.keyboard.press("Escape");
+  check((await mutePanel.count()) === 0 && (await a.page.evaluate(() => window.__emberisle.getState().buildMode)) === "path", "mute panel over an armed build: the first Escape closes the panel and leaves the build armed");
+  await a.page.keyboard.press("Escape");
+  check((await a.page.evaluate(() => window.__emberisle.getState().buildMode)) === "none", "mute panel over an armed build: the second Escape disarms the build");
+  await muteToggle.click();
+  await mutePanel.waitFor();
 
   await a.page.getByRole("button", { name: "Mute player Pine", exact: true }).click();
   await openChat(c);
@@ -771,7 +800,7 @@ try {
   const mutedFloat = a.page.locator(`[data-testid="rail-${mutedPlayer}"] [data-testid="reaction"][data-emote="🔥"]`);
   const mutedReactLine = a.page.getByTestId("chat-log").locator('[data-testid="react-line"][data-emote="🔥"]').filter({ hasText: "Pine" });
   check((await mutedFloat.count()) === 0 && (await mutedReactLine.count()) === 0, "mute: Pine's reaction bubble and its log line are hidden only in Ember's view");
-  await a.page.getByRole("button", { name: "Unmute player Pine", exact: true }).click();
+  await a.page.getByRole("button", { name: "Mute player Pine", exact: true }).click();
   await mutedFloat.waitFor({ timeout: 1500 });
   await mutedReactLine.first().waitFor({ timeout: 1500 });
   check(true, "mute: unmuting Pine restores the active reaction and its log line");
@@ -789,7 +818,7 @@ try {
   await a.page.getByRole("button", { name: "Open chat, 1 unread", exact: true }).click();
   await a.page.getByTestId("chat-unread").waitFor({ state: "detached" });
   await a.page.getByRole("button", { name: "Mute players", exact: true }).click();
-  await a.page.getByRole("button", { name: "Unmute player Pine", exact: true }).click();
+  await a.page.getByRole("button", { name: "Mute player Pine", exact: true }).click();
 
   // Storage can be unavailable in a private or quota-limited context. The preference still applies in this tab.
   await a.page.evaluate(() => {
@@ -804,7 +833,7 @@ try {
   check(await a.page.getByTestId(`chat-mute-seat-${mutedSeat}`).getAttribute("aria-pressed") === "true", "mute: blocked storage still mutes in the current tab");
   check((await a.page.getByTestId("chat-log").locator("li").filter({ hasText: mutedLine }).count()) === 0, "mute: blocked storage still hides Pine's chat line");
   await a.page.evaluate(() => window.__restoreStorageSetItem());
-  await a.page.getByRole("button", { name: "Unmute player Pine", exact: true }).click();
+  await a.page.getByRole("button", { name: "Mute player Pine", exact: true }).click();
   await a.page.getByTestId("chat-log").locator("li").filter({ hasText: mutedLine }).waitFor();
   check(true, "mute: blocked-storage preference can be cleared in the current tab");
   await a.page.getByRole("button", { name: "Minimize chat" }).click();
@@ -1198,6 +1227,11 @@ try {
     await b.page.getByRole("button", { name: /^Open chat/ }).click();
   }
   for (const line of historyLines) await b.page.getByTestId("chat-log").locator("li", { hasText: line }).waitFor();
+  for (const line of historyLines) {
+    const shown = await b.page.getByTestId("chat-log").locator("li", { hasText: line }).count();
+    const stored = await b.page.evaluate((text) => window.__emberisle.getState().chat.filter((l) => l.text === text).length, line);
+    check(shown === 1 && stored === 1, `chat history: after the reload "${line}" shows exactly once (log ${shown}, store ${stored})`);
+  }
   check(true, "chat history: Tide reloads mid-game in the same seat and sees earlier chat lines");
 
   // #477, #899: Open chat, the one chat button, sits in the top row beside the Table menu, a place that depends on neither the turn nor the
@@ -1241,7 +1275,8 @@ try {
         const p = i.screenOf(id);
         return p && p.x >= 0 && p.y >= 0 && p.x <= innerWidth && p.y <= innerHeight ? [{ id, x: Math.round(p.x * 10) / 10, y: Math.round(p.y * 10) / 10 }] : [];
       });
-      return { vw: innerWidth, vh: innerHeight, env, extra, chat, menu, status, targets };
+      const header = rect(document.querySelector("header.hud-header"));
+      return { vw: innerWidth, vh: innerHeight, env, extra, chat, menu, status, targets, header, coarse: matchMedia("(pointer: coarse)").matches };
     });
   const dockLayout = async (t) => {
     let last = "";
@@ -1260,6 +1295,9 @@ try {
     const roll = t.page.getByRole("button", { name: "Roll", exact: true });
     const turn = ownTurn ? "own Roll turn" : "another seat's turn";
     const cdp = await t.page.context().newCDPSession(t.page);
+    // #520: these are phone sizes, so run them with touch emulation (a coarse pointer), not at desktop pointer settings. 844 px
+    // wide is the one that only counts as a phone through the pointer.
+    await cdp.send("Emulation.setTouchEmulationEnabled", { enabled: true, maxTouchPoints: 5 });
     for (const size of DOCK_SIZES) {
       const tag = `${size.width}x${size.height}, ${turn}`;
       await t.page.setViewportSize({ width: size.width, height: size.height });
@@ -1272,6 +1310,11 @@ try {
       if (m.vw !== size.width || m.vh !== size.height || m.env.some((v, i) => v !== want[i])) bad(`the viewport or inset emulation did not take (${m.vw}x${m.vh}, env ${m.env})`);
       const safe = { left: size.insets.left, top: size.insets.top, right: size.width - size.insets.right, bottom: size.height - size.insets.bottom };
       const hit = (a, b) => a.right > b.left && a.left < b.right && a.bottom > b.top && a.top < b.bottom;
+      if (!m.coarse) bad("touch emulation did not give a coarse pointer");
+      const strip = m.status.find((x) => x.id === "seat-strip");
+      // Sideways, the strip shares the header row with Open chat; upright it sits under the header, so only landscape is asserted.
+      if (!strip) bad("no seat strip on screen");
+      else if (size.width > size.height && (strip.left < m.header.left - 0.5 || strip.right > m.header.right + 0.5 || strip.top < m.header.top - 0.5 || strip.bottom > m.header.bottom + 0.5)) bad(`the seat strip is not inside the header ${JSON.stringify(strip)} vs ${JSON.stringify(m.header)}`);
       if (m.extra) bad(`${m.extra} separate reaction, soundboard or smile buttons are showing; Open chat is the one button`);
       for (const [name, r] of [["Open chat", m.chat]]) {
         if (r.right - r.left < 44 - 0.5 || r.bottom - r.top < 44 - 0.5) bad(`${name} is ${(r.right - r.left).toFixed(0)}x${(r.bottom - r.top).toFixed(0)}, under 44 px`);
@@ -1311,6 +1354,7 @@ try {
       }
     }
     await cdp.send("Emulation.setSafeAreaInsetsOverride", { insets: { top: 0, right: 0, bottom: 0, left: 0 } });
+    await cdp.send("Emulation.setTouchEmulationEnabled", { enabled: false });
   };
   const ownTab = await tabForTurn(true);
   const otherTab = await tabForTurn(false);

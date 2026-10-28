@@ -44,7 +44,7 @@ README "Messages between client and host" gains these rows:
 |---|---|
 | `chat {id, seat, player, name, color, text, at}` | A chat line, sent to every seat, the sender included |
 | `react {seat, player, emote, to, at}` | A reaction, sent to every seat, the sender included |
-| `welcome {code, you, host, chat[]}` | `chat` is the room's last 50 lines (the new field) |
+| `welcome {code, you, host, chat[]}` | `chat` is the room's last 30 lines (the new field) |
 
 - **The host fills in who spoke.** `seat` = `ws.seat.id`, `player` = `ws.seat.pid ?? null` (null in the lobby),
   and `name` and `color` come from the seat. Any `from`, `name`, or `color` the client sends is ignored.
@@ -60,7 +60,7 @@ README "Messages between client and host" gains these rows:
 |---|---|
 | `cleanText(raw)` | Not a string → `null`. Drop `\p{Cc}` (control chars, including newlines), collapse runs of spaces, trim. Cut to **200 code points** (`Array.from(s).slice(0, 200).join("")`, so an emoji is never split). Empty → `null`. |
 | `allow(bucket, now)` | A token bucket per seat: 5 tokens, refilled at 1 per second. Chat and reactions share it. Returns `false` when it is empty. |
-| `remember(list, line)` | Push and keep the last **50**. |
+| `remember(list, line)` | Push and keep the last **30** by default (the host passes 30 too). |
 | `loadEmotes(dir)` | `readdirSync(dir)`, keep `/^[a-z0-9-]+\.(png|webp)$/`, and return a `Set` of ids without the extension. A missing folder returns an empty `Set` and logs one warning. The host calls it once at start with `src/assets/emotes/`. |
 
 `talk(ws, room, msg)` in `host.mjs`:
@@ -147,6 +147,21 @@ never fire while you type.
 `dangerouslySetInnerHTML`, no link detection, and chat text is never used as a URL, a class, or a style. The mention
 highlight splits the text on the literal string `@<your name>` with `split()`, not with a regex built from user
 text. An emote renders only as `EMOTES[id]`, the URL from the local glob. An unknown id renders nothing.
+
+## Mute (#500, #520)
+
+An online table with other named seats shows a 44 px **Mute players** toggle (icon only, `aria-expanded`, `aria-controls="chat-mute-panel"`)
+in the dock's tab row, beside Minimize. It opens `#chat-mute-panel`, a glass group with one 44 px button per other seat.
+
+- **Local only.** A mute hides that seat's chat lines, reactions (floats and log rows) and soundboard taps in this browser. It
+  is kept in `localStorage` under `emberisle-chat-muted-<code>`; if storage is blocked it still applies in the current tab.
+  Nothing is sent to the host. A muted seat's lines do not count toward the unread badge.
+- **One name, one state.** Each seat button has the fixed name `Mute player <name>` and `aria-pressed` says whether it is on, so a
+  screen reader announces the state once. The visible text is `Mute <name>`, with ` (muted)` added while it is on.
+- **Closing.** Escape or a press outside the panel closes it and, for Escape, returns focus to the toggle. Escape closes only the
+  topmost layer: the panel's key handler stops the key, and `escape-disarm.ts` stands down while `chat-mute-panel` is in the
+  page, so with the panel open over an armed build the first Escape closes the panel and the second disarms the build.
+- **Minimize** (button or Escape in the input) returns focus to **Open chat**, not to `<body>`.
 
 ## Reactions
 
@@ -249,7 +264,7 @@ the other two nodes keep the board out of them:
 ## Test plan
 
 **`server/chat-prove.mjs`, in `npm test`.** It starts `host.mjs` on port 0 and runs 3 or 4 `ws` clients:
-1. Unit: `cleanText` on `"  hi\u0007 there \n"` → `"hi there"`. 250 code points → 200. A 199-char string + 🙂 stays whole. `""`, `"   "`, `42` → `null`. `remember` keeps the last 50 of 60. `allow` gives 5 at once, the 6th is refused, and 1 more comes back after 1000 ms. `loadEmotes` on the real folder includes `ben-10`, and a missing folder gives an empty `Set`.
+1. Unit: `cleanText` on `"  hi\u0007 there \n"` → `"hi there"`. 250 code points → 200. A 199-char string + 🙂 stays whole. `""`, `"   "`, `42` → `null`. `remember` keeps the last 30 of 60 (default and explicit 30). `allow` gives 5 at once, the 6th is refused, and 1 more comes back after 1000 ms. `loadEmotes` on the real folder includes `ben-10`, and a missing folder gives an empty `Set`.
 2. Lobby: A sends `{type:"chat", text:"hello", name:"Mallory", from:"s9", color:"#000"}`. All 3 get `chat` with `seat:"s0"`, `player:null`, A's real name and colour, and `text:"hello"`.
 3. An empty chat, and a react with `emote:"nope"`, reach nobody within 300 ms.
 4. Rate: A sends 6 in a row. A gets 5 `chat` echoes and one `error "Slow down."`. B and C get 5 lines and no error.

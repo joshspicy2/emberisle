@@ -16,6 +16,12 @@ const INPUT_ID = "chat-input";
 const LINE_PX = 22;
 // The Open chat button sets this before the dock opens, and the dock focuses the input once it has (the two are separate components).
 const focusNext = { current: false };
+// Set when the dock is minimized from inside, so the Open chat button that replaces it takes focus (not <body>).
+const focusOpenButton = { current: false };
+const minimizeChat = () => {
+  focusOpenButton.current = true;
+  useGame.getState().setChatOpen(false);
+};
 
 // Text renders only as React children. The mention is found with split() on the literal "@name", never a regex.
 function Mention({ text, name }: { text: string; name: string }) {
@@ -282,12 +288,35 @@ function MuteMenu({ above = false }: { above?: boolean }) {
   const mode = useGame((s) => s.mode);
   const { muted, toggle } = useMutedSeats(code);
   const [open, setOpen] = useState(false);
+  const root = useRef<HTMLDivElement>(null);
   const targets = mode === "online" ? seats.filter((seat) => seat.id !== seatId && seat.name) : [];
+
+  // Escape closes the panel and returns focus to its toggle; a press outside closes it too. The capture listener on `document`
+  // runs after escape-disarm's window one (which stands down while the panel is in the DOM) and stops the key there, so the chat
+  // input does not also minimize: the first Escape closes this layer and only the next one reaches the layer under it.
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      e.stopPropagation();
+      setOpen(false);
+      root.current?.querySelector<HTMLElement>('[data-testid="chat-mute-toggle"]')?.focus();
+    };
+    const onPress = (e: PointerEvent) => {
+      if (!root.current?.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("keydown", onKey, true);
+    document.addEventListener("pointerdown", onPress, true);
+    return () => {
+      document.removeEventListener("keydown", onKey, true);
+      document.removeEventListener("pointerdown", onPress, true);
+    };
+  }, [open]);
 
   if (!targets.length) return null;
 
   return (
-    <div className="relative">
+    <div ref={root} className="relative">
       <button
         type="button"
         data-testid="chat-mute-toggle"
@@ -319,12 +348,13 @@ function MuteMenu({ above = false }: { above?: boolean }) {
                 key={seat.id}
                 type="button"
                 data-testid={`chat-mute-seat-${seat.id}`}
-                aria-label={`${isMuted ? "Unmute" : "Mute"} player ${seat.name}`}
+                aria-label={`Mute player ${seat.name}`}
                 aria-pressed={isMuted}
                 onClick={() => toggle(seat.id)}
                 className="h-11 shrink-0 cursor-pointer rounded-control bg-glass px-3 text-left text-sm text-zinc-700 hover:text-zinc-900"
               >
-                {isMuted ? `Unmute ${seat.name}` : `Mute ${seat.name}`}
+                {`Mute ${seat.name}`}
+                {isMuted ? <span aria-hidden="true"> (muted)</span> : null}
               </button>
             );
           })}
@@ -369,9 +399,17 @@ export function ChatControls() {
   const open = useGame((s) => s.chatOpen);
   const unread = useUnmutedUnread();
   const setOpen = useGame((s) => s.setChatOpen);
+  const button = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (!open && focusOpenButton.current) {
+      focusOpenButton.current = false;
+      button.current?.focus();
+    }
+  }, [open, mode]);
   if (mode !== "online") return null;
   const openButton = (
     <button
+      ref={button}
       type="button"
       aria-label={unread ? `Open chat, ${unread} unread` : "Open chat"}
       onClick={() => {
@@ -494,7 +532,7 @@ export function ChatDock() {
     <button
       type="button"
       aria-label="Minimize chat"
-      onClick={() => setOpen(false)}
+      onClick={minimizeChat}
       className={cn("flex h-11 min-w-10 cursor-pointer items-center justify-center gap-1 rounded-control bg-glass text-zinc-700 hover:text-zinc-900", phone && open && "px-3 text-sm")}
     >
       <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="lucide lucide-minus size-4" aria-hidden="true"><path d="M5 12h14" /></svg>
@@ -519,7 +557,7 @@ export function ChatDock() {
             className="flex-1"
             rows={4}
             game
-            onEscape={() => setOpen(false)}
+            onEscape={minimizeChat}
             headerTestId="chat-sheet-header"
             actions={
               <div className="flex shrink-0 items-center gap-1">
@@ -549,7 +587,7 @@ export function ChatDock() {
           rows={6}
           game
           narrow
-          onEscape={() => setOpen(false)}
+          onEscape={minimizeChat}
           actions={
             <div className="flex shrink-0 items-center gap-1">
               <MuteMenu />

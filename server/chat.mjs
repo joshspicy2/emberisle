@@ -44,7 +44,7 @@ export function allow(bucket, now, cap = 5, rate = 1) {
   return true;
 }
 
-export function remember(list, line, limit = 50) {
+export function remember(list, line, limit = 30) {
   list.push(line);
   if (list.length > limit) list.splice(0, list.length - limit);
   return list;

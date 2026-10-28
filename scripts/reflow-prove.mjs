@@ -238,6 +238,37 @@ try {
       await page.waitForSelector('[data-testid="hud-more-below"]', { state: "detached", timeout: 2000 });
       check(!(await stackState()).cue, `${tag} hud: cue gone once scrolled to the bottom`, await stackState());
     }
+    // #520: online at 844x390, four seats. Open chat (ChatControls) joins the header row beside the Table menu, and it must not
+    // cover a seat cell or cut a seat name: the strip gives way to it (docs/design/chat.md).
+    if (viewport.width === 844 && viewport.height === 390) {
+      await page.evaluate(() => window.__emberisle.setState({ mode: "online" }));
+      await page.getByRole("button", { name: /^Open chat/ }).waitFor();
+      await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+      const online = await page.evaluate(() => {
+        const rect = (el) => { const r = el.getBoundingClientRect(); return { left: r.left, top: r.top, right: r.right, bottom: r.bottom }; };
+        const hit = (a, b) => a.right > b.left + 0.5 && a.left < b.right - 0.5 && a.bottom > b.top + 0.5 && a.top < b.bottom - 0.5;
+        const header = document.querySelector("header > .pointer-events-auto");
+        const strip = document.querySelector('[data-testid="seat-strip"]');
+        const chat = rect(document.querySelector('button[aria-label^="Open chat"]'));
+        const menu = rect(document.querySelector('button[aria-label="Table menu"]'));
+        const cells = [...strip.querySelectorAll('[data-testid^="seat-p"]')];
+        return {
+          inHeader: !!strip.closest("header"),
+          cells: cells.length,
+          covered: cells.filter((c) => hit(rect(c), chat)).length,
+          cut: cells.filter((c) => {
+            const name = [...c.querySelectorAll('[data-testid="seat-name"]')].find((x) => x.getClientRects().length > 0 && getComputedStyle(x).position !== "absolute");
+            return !name || name.scrollWidth > name.clientWidth || name.parentElement.scrollWidth > name.parentElement.clientWidth;
+          }).length,
+          stripInHeader: rect(strip).left >= rect(header).left - 0.5 && rect(strip).right <= rect(header).right + 0.5 && rect(strip).top >= rect(header).top - 0.5 && rect(strip).bottom <= rect(header).bottom + 0.5,
+          chatHitsMenu: hit(chat, menu),
+          coarse: matchMedia("(pointer: coarse)").matches,
+        };
+      });
+      check(online.coarse, `${tag} online: the phone runs with a coarse pointer`, online);
+      check(online.inHeader && online.cells === 4 && online.stripInHeader, `${tag} online, 4 seats: the seat strip is in the header`, online);
+      check(online.covered === 0 && online.cut === 0 && !online.chatHitsMenu, `${tag} online, 4 seats: Open chat covers no seat cell, cuts no seat name and clears the Table menu`, online);
+    }
     await page.close();
   }
   check(errors.length === 0, "zero console errors", errors);

@@ -22,11 +22,17 @@ assert.equal(cleanText(""), null);
 assert.equal(cleanText("   "), null);
 assert.equal(cleanText(42), null);
 
+// The host keeps 30 lines per room (host.mjs passes 30; the default matches it).
 const kept = remember([], { n: 0 });
 for (let i = 1; i < 60; i++) remember(kept, { n: i });
-assert.equal(kept.length, 50);
-assert.equal(kept[0].n, 10);
-assert.equal(kept[49].n, 59);
+assert.equal(kept.length, 30, "remember defaults to a 30-line cap");
+assert.equal(kept[0].n, 30);
+assert.equal(kept[29].n, 59);
+const keptExplicit = remember([], { n: 0 }, 30);
+for (let i = 1; i < 45; i++) remember(keptExplicit, { n: i }, 30);
+assert.equal(keptExplicit.length, 30, "an explicit 30-line cap holds");
+assert.equal(keptExplicit[0].n, 15);
+assert.equal(keptExplicit[29].n, 44);
 
 {
   const bucket = { tokens: 5, at: 0 };
