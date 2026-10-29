@@ -39,6 +39,7 @@ import { chunkUrl } from "@/lib/lazy";
 import { PAINT, RIM } from "@/lib/scene/palette";
 import { BLOCK_H } from "@/lib/scene/jelly-dims";
 import type { JellyBoard, JellyStats } from "@/lib/scene/jelly-board";
+import { LAND_MAX_RETRIES, LAND_RETRY_MS, type LandAppearance, type LandHex, type LandLook, type LandPhase, type LandQuality, type LandStatus, type VisibilityContext } from "@/lib/scene/land-appearance";
 import type { Dock, Shore } from "@/lib/scene/harbor-jelly";
 import { OceanLife } from "@/lib/scene/ocean-life";
 import { makeBruno, type Bruno } from "@/lib/scene/bruno";
@@ -57,17 +58,29 @@ export function topOf(_terrain: Terrain) {
   return TILE_Y + BLOCK_H;
 }
 
-// The Hex Jelly scenes load as their own chunk; the board shows plain slabs until every scene is built, then the island swaps
-// in whole (the owner, 2026-10-16: wait for it, no pop-in). A failed load leaves the slabs (the board still plays) and tries
-// again a few seconds on (five times at most), under a fresh query: the browser remembers a module that failed for the life of the page (lazy.ts).
-let jellyFailed: string | undefined;
-let jellyRetries = 0;
-const loadJelly = (): Promise<typeof import("@/lib/scene/jelly-board")> =>
-  (jellyFailed ? import(/* @vite-ignore */ `${jellyFailed}?retry=${++jellyRetries}`) : import("@/lib/scene/jelly-board")).catch((e: unknown) => {
-    jellyFailed = chunkUrl(e) ?? jellyFailed;
+// Each look loads as its own chunk (the Hex Jelly scenes, the sculpted Classic land), by its own dynamic import: a session that
+// never asks for Classic never requests it. The board shows plain slabs until the requested look is built, then the island swaps
+// in whole (the owner, 2026-10-16: wait for it, no pop-in); a look change on the same land keeps the look on screen until the
+// new one is ready. A failed load leaves what was there (the board still plays) and tries again a few seconds on (five times at
+// most), under a fresh query: the browser remembers a module that failed for the life of the page (lazy.ts).
+export type LookFactory = (hexes: LandHex[], key: string, pause: () => Promise<boolean>, lite: boolean) => Promise<LandAppearance | null>;
+const failedChunk: Partial<Record<LandLook, string>> = {};
+const chunkRetries: Record<LandLook, number> = { jelly: 0, classic: 0 };
+const retryUrl = (look: LandLook, url: string) => `${url}?retry=${++chunkRetries[look]}`;
+const importLook = async (look: LandLook): Promise<LookFactory> => {
+  const url = failedChunk[look];
+  try {
+    if (look === "jelly") {
+      const m: typeof import("@/lib/scene/jelly-board") = await (url ? import(/* @vite-ignore */ retryUrl(look, url)) : import("@/lib/scene/jelly-board"));
+      return (hexes, key, pause, lite) => m.JellyBoard.create(hexes, (kind) => hashStr(`${key}|${kind}`), pause, lite);
+    }
+    const m: typeof import("@/lib/scene/classic-board") = await (url ? import(/* @vite-ignore */ retryUrl(look, url)) : import("@/lib/scene/classic-board"));
+    return (hexes, key, pause, lite) => m.ClassicBoard.create(hexes, hashStr(`${key}|classic`), pause, lite ? "lite" : "full");
+  } catch (e) {
+    failedChunk[look] = chunkUrl(e) ?? failedChunk[look];
     throw e;
-  });
-const JELLY_RETRY_MS = 4000;
+  }
+};
 // The jelly pieces (#638, pieces-jelly-prompt.md); ?pieces=slab keeps the slab pieces (for the classic look, #641).
 const JELLY_PIECES = (() => {
   try {
@@ -90,7 +103,7 @@ const HARBOR_JELLY = (() => {
     return true;
   }
 })();
-type TerrainStats = { ready: boolean } & JellyStats;
+type TerrainStats = { ready: boolean; look: LandLook | null } & JellyStats;
 // The stand-in slab and the unseen pick block: a hex prism the jelly block's size (corners at 30 + 60k degrees, as the
 // board's pointy-top hexes), standing on its base.
 const SLAB_GEO = new THREE.CylinderGeometry(HEX_SIZE * 0.98, HEX_SIZE * 0.98, BLOCK_H, 6).translate(0, BLOCK_H / 2, 0);
@@ -158,6 +171,8 @@ export const TOKEN_R = 0.26;
 export const TOKEN_H = 0.05;
 export const TOKEN_FACE = 0.245;
 // How far a tilted token is lifted so its near edge stays where the flat disc's underside was.
+// The drop of the lowest row of a token's glyph (its pips' bottom edge) from its face's centre, along the face.
+const GLYPH_BOTTOM = ((196 + 14 - 128) / 128) * TOKEN_FACE;
 export const TOKEN_LIFT = TOKEN_R * Math.sin(TOKEN_TILT) + (TOKEN_H / 2) * Math.cos(TOKEN_TILT) - TOKEN_H / 2;
 
 type DockPosition = { id: string; kind: HarborKind; x: number; y: number };
@@ -221,8 +236,31 @@ export class IsleRenderer {
   private beach!: THREE.Mesh;
   // The crystal sea's own lace, kept while a shore's moved one stands in for it.
   private baseWash: THREE.Mesh | null = null;
-  // The island's Hex Jelly scenes, batched (jelly-board.ts), once built; until then `slabs` stand in.
-  private jelly: JellyBoard | null = null;
+  // The island's land look (Hex Jelly, jelly-board.ts, or the sculpted Classic land, classic-board.ts), once built; until then
+  // `slabs` stand in. `lookOn` is which one this is; `want` is the one asked for (#759), and the two differ only while the
+  // asked-for look builds or after it failed. Everything else on the board (pick blocks, tokens, pieces, the wayfarer, the shore,
+  // the sea, the camera) is the renderer's own and is never rebuilt by a look change.
+  private look: LandAppearance | null = null;
+  private lookOn: LandLook | null = null;
+  private want: LandLook = "jelly";
+  // The active request's progress. `buildId` names the request (a look change, a new board, a retry, a dispose each end the one
+  // before): every wait in it rechecks that it still owns the board.
+  private buildId = 0;
+  private landPhase: LandPhase = "building";
+  private landStage: LandStatus["stage"] = null;
+  private landRetries = 0;
+  private landError: string | null = null;
+  private retryTimer: ReturnType<typeof setTimeout> | undefined;
+  private landSpec: { key: string; hexes: LandHex[] } | null = null;
+  private shoreGen = -1;
+  private visFor: LandAppearance | null = null;
+  private visKey = "";
+  // Hooks the proofs wrap to delay or fail a stage; the production ones import the chunk and compile its shaders.
+  loadLook: (look: LandLook) => Promise<LookFactory> = importLook;
+  compileLook: (look: LandAppearance) => Promise<void> = (look) => this.compileInPlace(look);
+  retryMs = LAND_RETRY_MS;
+  // Called with the new status whenever it changes (the preference row reads it).
+  onLand: (status: LandStatus) => void = () => {};
   // Whether the GPU is software, and whether the board is lite (the ground only).
   software = false;
   lite = false;
@@ -589,7 +627,7 @@ export class IsleRenderer {
       this.flashes = this.flashes.filter((f) => f.mat !== mat);
       this.flashes.push({ mat, id, age: 0 });
     }
-    if (!this.calm()) this.jelly?.roll(ids);
+    if (!this.calm()) this.look?.roll(ids);
   }
 
   // The caps' emissive for each flash at its age. Reduced motion steps to the peak and back with no ramp.
@@ -600,7 +638,7 @@ export class IsleRenderer {
       const a = f.age;
       const level = a >= FLASH_S ? 0 : calm ? 1 : a < FLASH_IN_S ? 1 - (1 - a / FLASH_IN_S) ** 3 : 1 - (a - FLASH_IN_S) / (FLASH_S - FLASH_IN_S);
       f.mat.emissiveIntensity = FLASH_PEAK * level;
-      this.jelly?.glow(f.id, f.mat.emissiveIntensity);
+      this.look?.glow(f.id, f.mat.emissiveIntensity);
     }
     this.flashes = this.flashes.filter((f) => f.age < FLASH_S);
   }
@@ -682,7 +720,7 @@ export class IsleRenderer {
       this.flashHexes(payingHexes(state));
       this.pulsePayers(state);
     }
-    this.jelly?.robber(state.robberHex ?? null);
+    this.look?.robber(state.robberHex ?? null);
     const rh = state.hexes.find((h) => h.id === state.robberHex);
     if (rh) {
       this.robberSpot(rh);
@@ -701,7 +739,7 @@ export class IsleRenderer {
     const w = worldOfHex(rh);
     if (rh.pip === null) return this.robberTarget.set(w.x, topOf(rh.terrain), w.z);
     const [dx, dz] = [-Math.cos(DIORAMA_AZIMUTH) * WAYFARER_ASIDE, Math.sin(DIORAMA_AZIMUTH) * WAYFARER_ASIDE];
-    const g = this.jelly?.groundAt(rh.id, dx, dz);
+    const g = this.look?.groundAt(rh.id, dx, dz);
     return this.robberTarget.set(w.x + dx, g !== undefined && Number.isFinite(g) ? g : topOf(rh.terrain), w.z + dz);
   }
 
@@ -767,8 +805,11 @@ export class IsleRenderer {
     this.renderer.domElement.removeEventListener("webglcontextlost", this.onContextLost);
     this.dropFence();
     this.fps?.el.remove();
-    this.jelly?.dispose();
-    this.jelly = null;
+    this.buildId++;
+    clearTimeout(this.retryTimer);
+    this.look?.dispose();
+    this.look = null;
+    this.lookOn = null;
     this.shore?.dispose();
     this.shore = null;
     this.renderer.setAnimationLoop(null);
@@ -1233,7 +1274,7 @@ export class IsleRenderer {
     if (this.calm() || this.landings.length) return;
     const parts = this.land.children.filter((o) => o.userData.hex === id);
     this.wobble.start(id, parts, TILE_Y, performance.now());
-    this.jelly?.tap(id);
+    this.look?.tap(id);
     this.wake();
   }
 
@@ -1271,7 +1312,7 @@ export class IsleRenderer {
       this.walk = null;
       this.startWalk();
     }
-    const busy = now < this.busyUntil || this.flashes.length > 0 || this.payingPieces.length > 0 || !!this.jelly?.busy();
+    const busy = now < this.busyUntil || this.flashes.length > 0 || this.payingPieces.length > 0 || !!this.look?.busy();
     const gap = calm ? (busy ? 0 : Infinity) : this.titleMode ? 1000 / 30 : this.walk || pulsing || busy ? 0 : 1000 / 12;
     if (now - this.lastFrame < gap - 2) return;
     // Backpressure on ambient frames (the title's turn, the idle sea): while the GPU is still on the last one, wait for it
@@ -1301,7 +1342,7 @@ export class IsleRenderer {
     if (calm) {
       this.oceanLife.step(0, false, this.oceanViewport);
       // The scenes hold still; a dulling or a glow still lands.
-      this.jelly?.update(this.jellyT, false, true);
+      this.look?.update(this.jellyT, false, true);
       this.shore?.update(this.jellyT);
       this.pulseMarks(0, true);
       this.draw();
@@ -1312,7 +1353,7 @@ export class IsleRenderer {
     this.oceanLife.step(dt, true, this.oceanViewport, swell ? (x, z) => swell(x, z, t).y : undefined);
     this.foam.material.opacity = 0.32 + 0.23 * (0.5 + 0.5 * Math.sin(t * 0.8));
     this.jellyT = t;
-    this.jelly?.update(t);
+    this.look?.update(t);
     this.shore?.update(t);
     if (this.walk) {
       const w = this.walk;
@@ -1464,6 +1505,7 @@ export class IsleRenderer {
   private draw() {
     const t0 = performance.now();
     this.poseTokens();
+    this.pushVisibility();
     this.fadeSea();
     const crystal = this.waterPath === "crystal" ? this.crystal : null;
     if (crystal) this.drawUnder(crystal);
@@ -1473,7 +1515,7 @@ export class IsleRenderer {
       this.fps?.begin(t0);
       this.composer.render();
       this.fenceFrame();
-      this.fps?.end(this.jelly?.stats() ?? null, this.lite);
+      this.fps?.end(this.look?.stats() ?? null, this.lite);
     } finally {
       this.renderer.shadowMap.autoUpdate = true;
     }
@@ -1542,89 +1584,226 @@ export class IsleRenderer {
     };
   };
 
-  // The jelly board (#599, jelly-board.ts): its draw calls and triangles in the main pass, read by board-look-prove through
+  // The land look (#599, #759): its draw calls and triangles in the main pass, read by board-look-prove through
   // `window.__terrain`; before it is built, the stand-in slabs.
   terrainStats(): TerrainStats {
-    if (this.jelly) return { ready: true, ...this.jelly.stats() };
+    const l = this.look;
+    if (l) {
+      const s: Partial<JellyStats> & ReturnType<LandAppearance["stats"]> = l.stats();
+      return { ready: true, look: this.lookOn, lite: s.quality === "lite", drawCalls: s.drawCalls, triangles: s.triangles, kinds: s.kinds ?? 0, batches: s.batches ?? 0, bakes: s.bakes ?? 0, sprites: s.sprites ?? 0 };
+    }
     const n = this.slabs?.count ?? 0;
-    return { ready: false, lite: this.lite, drawCalls: n ? 1 : 0, triangles: n * 24, kinds: 0, batches: 0, bakes: 0, sprites: 0 };
+    return { ready: false, look: null, lite: this.lite, drawCalls: n ? 1 : 0, triangles: n * 24, kinds: 0, batches: 0, bakes: 0, sprites: 0 };
   }
 
-  // Ready once the island's scenes are built and showing (the proofs wait on it).
+  // Ready once the island's land look is built and showing (the proofs wait on it).
   get landReady() {
-    return this.jelly !== null;
+    return this.look !== null;
   }
 
-  // The jelly board, for the proofs (its ground and clearance).
+  // The jelly board, for the proofs (its ground and clearance); null while another look, or the slabs, is showing.
   get jellyBoard() {
-    return this.jelly;
+    return this.lookOn === "jelly" ? (this.look as JellyBoard) : null;
   }
 
-  private growScenes(gen: number, key: string, hexes: { id: string; terrain: Terrain; x: number; z: number; y: number }[], tries = 0) {
-    const alive = () => gen === this.landGen && !this.stopped;
+  // The land look on screen, whichever it is, for the proofs (stats, ground, the group).
+  get landLook(): LandAppearance | null {
+    return this.look;
+  }
+
+  // The selection and status API (#759) the preference row reads: which look is asked for, which shows, and how the build
+  // stands. A fresh frozen copy each time.
+  landStatus(): LandStatus {
+    return Object.freeze({
+      requested: this.want,
+      displayed: this.lookOn,
+      quality: (this.look?.stats().quality ?? (this.lite ? "lite" : "full")) as LandQuality,
+      phase: this.landPhase,
+      stage: this.landStage,
+      retries: this.landRetries,
+      maxRetries: LAND_MAX_RETRIES,
+      error: this.landError,
+    });
+  }
+
+  // Ask for a look. The one on screen stays until the new one is built, compiled and ready to swap in whole; asking again, for
+  // the same or another look, ends the request before it. Nothing here touches the stored choice.
+  setLandLook(look: LandLook) {
+    if (look === this.want) return;
+    this.want = look;
+    this.requestLook();
+  }
+
+  // Explicit recovery: after a failure (or while one waits to retry) try the requested look again, with the retries renewed.
+  retryLand() {
+    if (this.landPhase === "failed" || this.landPhase === "waiting") this.requestLook();
+  }
+
+  private announce() {
+    try {
+      this.onLand(this.landStatus());
+    } catch {
+      // A listener's failure is its own.
+    }
+  }
+
+  // Start the request for the wanted look on the board as it stands: nothing to build if it is already showing.
+  private requestLook() {
+    clearTimeout(this.retryTimer);
+    const id = ++this.buildId;
+    this.landRetries = 0;
+    this.landError = null;
+    this.landStage = null;
+    if (this.look && this.lookOn === this.want) this.landPhase = "ready";
+    else {
+      this.landPhase = "building";
+      if (this.landSpec) void this.growLook(id, this.want, this.landSpec, 0);
+    }
+    this.announce();
+  }
+
+  private stage(id: number, stage: LandStatus["stage"]) {
+    if (id !== this.buildId) return;
+    this.landStage = stage;
+    this.announce();
+  }
+
+  // Build a look off screen and swap it in whole. Every wait rechecks that this request still owns the board (a newer request,
+  // a new deal or the renderer's disposal ends it), and a look that finishes after that is disposed, never shown.
+  private async growLook(id: number, look: LandLook, spec: { key: string; hexes: LandHex[] }, tries: number) {
+    const alive = () => id === this.buildId && !this.stopped;
     // Not until the board's first frame is on screen: the chunk's parse and the first kind's build would otherwise hold it.
-    if (this.renders === 0) {
-      requestAnimationFrame(() => alive() && this.growScenes(gen, key, hexes, tries));
-      return;
+    while (this.renders === 0) {
+      await new Promise((r) => requestAnimationFrame(r));
+      if (!alive()) return;
     }
     performance.mark("props-start");
-    loadJelly()
-      .then(({ JellyBoard }) => (alive() ? JellyBoard.create(hexes, (kind) => hashStr(`${key}|${kind}`), () => new Promise<boolean>((r) => setTimeout(() => r(alive()), 0)), this.lite) : null))
+    let made: LandAppearance | null = null;
+    try {
+      this.stage(id, "import");
+      const make = await this.loadLook(look);
+      if (!alive()) return;
+      this.stage(id, "build");
+      made = await make(spec.hexes, spec.key, () => new Promise<boolean>((r) => setTimeout(() => r(alive()), 0)), this.lite);
+      if (!alive()) return made?.dispose();
+      if (!made) throw new Error("the look was not built");
       // Its shaders compile before it swaps in (in parallel where the browser can, KHR_parallel_shader_compile), not in the
-      // first frame that draws it. Compiled in place, into the composer's own target, so the programs are the frame's.
-      .then(async (jelly) => {
-        // Without parallel compile it would only move the same stall earlier (and three warns), so there it is skipped.
-        if (!jelly || !alive() || !this.renderer.extensions.has("KHR_parallel_shader_compile")) return jelly;
-        jelly.update(this.jellyT, true, true);
-        this.living.add(jelly.group);
-        const was = this.renderer.getRenderTarget();
-        this.renderer.setRenderTarget(this.composer.readBuffer);
-        const done = this.renderer.compileAsync(this.scene, this.cam());
-        this.renderer.setRenderTarget(was);
-        this.living.remove(jelly.group);
-        await done;
-        return jelly;
-      })
-      .then(
-        (jelly) => {
-          if (!jelly) return;
-          if (!alive()) return jelly.dispose();
-          this.jelly = jelly;
-          jelly.robber(this.lastState?.robberHex ?? null);
-          // The scenes' ground beside the token can stand off the flat cap: he steps onto it.
-          const rh = this.lastState?.hexes.find((h) => h.id === this.lastState?.robberHex);
-          if (rh) {
-            this.robberSpot(rh);
-            if (!this.walk) this.wayfarer.position.copy(this.robberTarget);
-          }
-          jelly.update(this.jellyT, true, true);
-          if (this.slabs) {
-            this.land.remove(this.slabs);
-            this.slabs.dispose();
-            (this.slabs.material as THREE.Material).dispose();
-            this.slabs = null;
-          }
-          this.living.add(jelly.group);
-          // A shore that fails to load or build leaves the plain beach and docks (said once a page).
-          if (HARBOR_JELLY && !this.lite)
-            loadShore()
-              .then(({ buildShore }) => alive() && this.swapShore(buildShore(this.coast, this.docks, hashStr(`${key}|shore`))))
-              .catch((e: unknown) => {
-                if (!shoreFailed) console.warn("The jelly shore did not load; the plain beach stays.", e);
-                shoreFailed = true;
-              });
-          (window as unknown as { __terrain: TerrainStats }).__terrain = this.terrainStats();
-          this.wake();
-          performance.mark("props-end");
-        },
-        () => tries < 5 && setTimeout(() => alive() && this.growScenes(gen, key, hexes, tries + 1), JELLY_RETRY_MS),
-      );
+      // first frame that draws it.
+      this.stage(id, "compile");
+      await this.compileLook(made);
+      if (!alive()) return made.dispose();
+      const done = made;
+      made = null;
+      this.publish(done, look, spec);
+    } catch (e) {
+      made?.dispose();
+      if (!alive()) return;
+      this.landStage = null;
+      this.landError = `${look === "classic" ? "Classic" : "Jelly"} could not load`;
+      if (tries >= LAND_MAX_RETRIES) {
+        this.landPhase = "failed";
+        console.warn(this.landError, e);
+      } else {
+        this.landPhase = "waiting";
+        this.retryTimer = setTimeout(() => {
+          if (!alive()) return;
+          this.landRetries = tries + 1;
+          this.landPhase = "building";
+          this.announce();
+          void this.growLook(id, look, spec, tries + 1);
+        }, this.retryMs);
+      }
+      this.announce();
+    }
+  }
+
+  // The shaders of a look compiled in place, into the composer's own target, so the programs are the frame's. Without
+  // parallel compile it would only move the same stall earlier (and three warns), so there it is skipped.
+  private async compileInPlace(look: LandAppearance) {
+    if (!this.renderer.extensions.has("KHR_parallel_shader_compile")) return;
+    look.update(this.jellyT, true, true);
+    this.living.add(look.group);
+    const was = this.renderer.getRenderTarget();
+    this.renderer.setRenderTarget(this.composer.readBuffer);
+    const done = this.renderer.compileAsync(this.scene, this.cam());
+    this.renderer.setRenderTarget(was);
+    this.living.remove(look.group);
+    await done;
+  }
+
+  // The swap, in one synchronous step: the new look takes the wayfarer's hex, the glows under way and the camera's view, then
+  // replaces the old look (and the slabs) in the scene, and only then is the old one disposed. Nothing shared is touched, and
+  // nothing here replays a roll, a sound or a payout.
+  private publish(next: LandAppearance, look: LandLook, spec: { key: string; hexes: LandHex[] }) {
+    const prev = this.look;
+    next.robber(this.lastState?.robberHex ?? null);
+    for (const f of this.flashes) next.glow(f.id, f.mat.emissiveIntensity);
+    next.update(this.jellyT, true, true);
+    this.pushVisibility(next);
+    this.living.add(next.group);
+    if (prev) this.living.remove(prev.group);
+    this.look = next;
+    this.lookOn = look;
+    if (this.slabs) {
+      this.land.remove(this.slabs);
+      this.slabs.dispose();
+      (this.slabs.material as THREE.Material).dispose();
+      this.slabs = null;
+    }
+    prev?.dispose();
+    // The new ground beside the token can stand off the old: the wayfarer steps onto it.
+    const rh = this.lastState?.hexes.find((h) => h.id === this.lastState?.robberHex);
+    if (rh) {
+      this.robberSpot(rh);
+      if (!this.walk) this.wayfarer.position.copy(this.robberTarget);
+    }
+    // The jelly shore belongs to the board, not to a look: loaded once per board, and a look change leaves it as it is. A
+    // shore that fails to load or build leaves the plain beach and docks (said once a page).
+    const gen = this.landGen;
+    if (HARBOR_JELLY && !this.lite && this.shoreGen !== gen) {
+      this.shoreGen = gen;
+      loadShore()
+        .then(({ buildShore }) => gen === this.landGen && !this.stopped && this.swapShore(buildShore(this.coast, this.docks, hashStr(`${spec.key}|shore`))))
+        .catch((e: unknown) => {
+          if (!shoreFailed) console.warn("The jelly shore did not load; the plain beach stays.", e);
+          shoreFailed = true;
+        });
+    }
+    this.landPhase = "ready";
+    this.landStage = null;
+    this.landRetries = 0;
+    this.landError = null;
+    (window as unknown as { __terrain: TerrainStats }).__terrain = this.terrainStats();
+    this.announce();
+    this.wake();
+    performance.mark("props-end");
+  }
+
+  // The camera and the tokens, by value and frozen, for a look that keeps tall things off the numerals (#759): sent when the
+  // view, the eye or the tokens' pose change, and to a look before it is shown. It holds no token, camera or scene object.
+  private pushVisibility(look: LandAppearance | null = this.look) {
+    if (!look) return;
+    const diorama = this.view === "diorama";
+    const eye = this.cam().position;
+    const az = diorama ? this.orbit.getAzimuthalAngle() : 0;
+    const key = `${this.view}|${az}|${eye.x}|${eye.y}|${eye.z}|${this.tokens.length}|${this.tokens[0]?.position.y}`;
+    if (look === this.visFor && key === this.visKey) return;
+    this.visFor = look;
+    this.visKey = key;
+    const tilt = diorama ? TOKEN_TILT : 0;
+    const tokens = this.tokens.map((t) =>
+      Object.freeze({ x: t.position.x, y: t.position.y, z: t.position.z, glyphBottom: t.position.y + (TOKEN_H / 2 + 0.001) * Math.cos(tilt) - GLYPH_BOTTOM * Math.sin(tilt) }),
+    );
+    const context: VisibilityContext = Object.freeze({ view: this.view, camera: Object.freeze({ x: eye.x, y: eye.y, z: eye.z }), azimuth: az, tokens: Object.freeze(tokens) });
+    look.setVisibilityContext(context);
   }
 
   private buildLand(state: GameState) {
     this.docksDirty = true;
-    this.jelly?.dispose();
-    this.jelly = null;
+    this.look?.dispose();
+    this.look = null;
+    this.lookOn = null;
+    this.visFor = null;
     this.slabs = null;
     disposeGroup(this.land);
     disposeGroup(this.living);
@@ -1673,10 +1852,11 @@ export class IsleRenderer {
     });
     this.land.add(slabs);
 
-    // The scenes: loaded and built a kind per task after the first draw (#543 restore budget), so no one task holds the page;
-    // then the island swaps in whole. A rebuild or a dispose before then drops them.
-    const gen = ++this.landGen;
-    this.growScenes(gen, landKey(state), state.hexes.map((h) => ({ id: h.id, terrain: h.terrain, ...worldOfHex(h), y: TILE_Y })));
+    // The land look: loaded and built a kind per task after the first draw (#543 restore budget), so no one task holds the page;
+    // then the island swaps in whole. A rebuild or a dispose before then drops it, and the stand-in slabs are the new board's.
+    this.landGen++;
+    this.landSpec = { key: landKey(state), hexes: state.hexes.map((h) => ({ id: h.id, terrain: h.terrain, q: h.q, r: h.r, ...worldOfHex(h), y: TILE_Y })) };
+    this.requestLook();
 
     // A dock spans a coastal edge, so both its corners carry the harbor; the deal spaces docks at least three edges apart, so two
     // neighbouring harbor corners on the coast loop of one kind are always one dock. One pier and one boat per dock.
@@ -2357,7 +2537,7 @@ function makeFps(renderer: THREE.WebGLRenderer) {
       }
       last = t0;
     },
-    end(stats: JellyStats | null, lite: boolean) {
+    end(stats: { drawCalls: number; triangles: number } | null, lite: boolean) {
       const now = performance.now();
       acc.cpu += now - start;
       acc.cpuN++;

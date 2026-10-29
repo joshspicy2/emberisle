@@ -24,6 +24,8 @@ const CEILINGS = [
   { name: "index", gzipBytes: 125200 },
   { name: "IslandCanvas", gzipBytes: 202500 },
   { name: "jelly-board", gzipBytes: 9000 },
+  // #759: the sculpted Classic land loads as its own chunk, only when asked for (2026-10-29; measured 18.04 kB).
+  { name: "classic-board", gzipBytes: 19000 },
   { name: "hex-jelly", gzipBytes: 50000 },
   { name: "harbor-jelly", gzipBytes: 11500 },
   { name: "online", gzipBytes: 9000 },
@@ -40,7 +42,9 @@ const CEILINGS = [
 ];
 
 // Growth allowance against the base, in gzip bytes. index is fixed at 400 B; the others take 0.33% of the base size, at least 200 B.
-const ALLOWANCE = { index: 400 };
+// #759 (2026-10-29): IslandCanvas takes 1600 B for the land look selection and status (requested and displayed look, bounded retries,
+// generation-owned publication, the visibility snapshot); measured +1483 B. The PR body gives the reason; needs the reviewer's OK.
+const ALLOWANCE = { index: 400, IslandCanvas: 1600 };
 const ALLOWANCE_RATE = 0.0033;
 const ALLOWANCE_MIN = 200;
 const allowanceFor = (name, baseBytes) => ALLOWANCE[name] ?? Math.max(ALLOWANCE_MIN, Math.round(baseBytes * ALLOWANCE_RATE));

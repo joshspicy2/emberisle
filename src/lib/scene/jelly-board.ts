@@ -2,6 +2,7 @@ import * as THREE from "three";
 import { type Terrain } from "@/lib/game/types";
 import { setBoardDetail, tileSteps, type Tile } from "@/lib/scene/hex-jelly";
 import { BLOCK_H } from "@/lib/scene/jelly-dims";
+import type { LandAppearance, LandStats, VisibilityContext } from "@/lib/scene/land-appearance";
 
 // The jelly board (#599, docs/design/hex-jelly-prompt.md): the six Hex Jelly scenes on the game board.
 //
@@ -344,7 +345,7 @@ class SpriteBatch {
   }
 }
 
-export class JellyBoard {
+export class JellyBoard implements LandAppearance {
   readonly group = new THREE.Group();
   private kinds: Kind[] = [];
   private batches = new Map<string, Batch>();
@@ -1007,7 +1008,11 @@ export class JellyBoard {
     return closest;
   }
 
-  stats(): JellyStats {
+  // The jelly look never moves what it draws for the camera or the tokens: the context is accepted and ignored.
+  setVisibilityContext(_context: VisibilityContext) {}
+
+  // The jelly board's own numbers, with the common ones beside them (LandStats): what it owns is its batches, bakes and sprites.
+  stats(): JellyStats & LandStats {
     let triangles = 0;
     for (const b of this.batches.values()) {
       const counts = new Map<number, number>();
@@ -1016,7 +1021,18 @@ export class JellyBoard {
     }
     for (const m of this.bakes) triangles += m.userData.tris as number;
     for (const sb of this.sprites) triangles += 2 * sb.count;
-    return { lite: this.lite, drawCalls: this.batches.size + this.bakes.length + this.sprites.length, triangles: Math.round(triangles), kinds: this.kinds.length, batches: this.batches.size, bakes: this.bakes.length, sprites: this.sprites.length };
+    const draws = this.batches.size + this.bakes.length + this.sprites.length;
+    return {
+      lite: this.lite,
+      drawCalls: draws,
+      triangles: Math.round(triangles),
+      kinds: this.kinds.length,
+      batches: this.batches.size,
+      bakes: this.bakes.length,
+      sprites: this.sprites.length,
+      quality: this.lite ? "lite" : "full",
+      objects: { meshes: draws, geometries: draws, materials: draws },
+    };
   }
 
   dispose() {

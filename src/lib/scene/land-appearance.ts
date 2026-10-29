@@ -56,3 +56,30 @@ export interface LandAppearance {
   // Releases everything this look owns; safe to call again.
   dispose(): void;
 }
+
+// Which look the board wears. The renderer holds the one that was requested and the one that is showing apart (#759): a switch
+// builds the requested look off screen and swaps it in whole, so the two are equal only when the build has landed.
+export type LandLook = "jelly" | "classic";
+
+// Where the active request stands. `building` covers the import, the construction and the shader compile (`stage` says which);
+// `waiting` is the pause before a retry; `failed` is out of retries until an explicit retry; `ready` is a complete look on screen.
+export type LandPhase = "building" | "waiting" | "failed" | "ready";
+
+// What the renderer says of its land, for the preference row and the proofs. A fresh immutable copy on every read.
+export type LandStatus = Readonly<{
+  requested: LandLook;
+  // The look on screen, or null while the board's stand-in slabs stand in for it.
+  displayed: LandLook | null;
+  quality: LandQuality;
+  phase: LandPhase;
+  stage: "import" | "build" | "compile" | null;
+  // Retries spent on the active request (the first attempt is not one), and the most it may spend.
+  retries: number;
+  maxRetries: number;
+  // The last failure, cleared by a success.
+  error: string | null;
+}>;
+
+// The retry policy shared with the lazy loader: the first attempt, then at most five retries four seconds apart.
+export const LAND_MAX_RETRIES = 5;
+export const LAND_RETRY_MS = 4000;
