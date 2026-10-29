@@ -147,12 +147,12 @@ let openCode;
   assert.equal(reply.tables[0].code, openCode);
   lister.ws.terminate();
 
-  // At most one open table per host: a second open create is refused.
+  // At most one live table per host player (#944): the same player's second open create is refused.
   const rival = client(port, "Rival");
   await rival.open;
-  rival.send({ type: "hello", name: "Rival", visibility: "open" });
+  rival.send({ type: "hello", name: "Rival", visibility: "open", hostSeats: [welcome.secret] });
   const err = await rival.next("error");
-  assert.match(err.message, /already listed/i, "second open table is refused");
+  assert.equal(err.message, "You're already hosting a table.", "the same player's second open table is refused");
   const still = await (await fetch(`${baseUrl}/tables`)).json();
   assert.equal(still.length, 1, "list still has only Jarrod's table");
   assert.equal(still[0].code, openCode);
@@ -454,13 +454,19 @@ let openCode;
         "winner goes first; remaining seat order and colors survive rematch");
     }
     const tables = await list();
-    const expectedCode = scenario === "free" ? "RCVR" : successorCode;
-    if (expectedCode) {
-      assert.equal(tables.length, 1, "exactly one room retains the open slot");
-      assert.equal(tables[0].code, expectedCode, "rematch reclaims a free slot without replacing its successor");
-      assert.equal(tables[0].status, scenario === "free" ? "playing" : "lobby");
-      assert.equal(tables[0].seated, scenario === "free" ? 3 : 1, "listing counts exactly the rematch or successor seats");
-      assert.equal(tables[0].total, 4, "the listed capacity stays four");
+    // #944: open tables are no longer a single host-wide slot, so an open rematch is listed beside its successor.
+    const rematchEntry = { code: "RCVR", status: "playing", seated: 3, total: 4 };
+    const successorEntry = { code: successorCode, status: "lobby", seated: 1, total: 4 };
+    const expected = scenario === "free" ? [rematchEntry] : scenario === "successor" ? [rematchEntry, successorEntry] : [];
+    if (expected.length) {
+      assert.equal(tables.length, expected.length, "exactly the open rematch and any successor are listed");
+      for (const want of expected) {
+        const got = tables.find((t) => t.code === want.code);
+        assert.equal(got?.code, want.code, "rematch is listed again without replacing its successor");
+        assert.equal(got.status, want.status);
+        assert.equal(got.seated, want.seated, "listing counts exactly the rematch or successor seats");
+        assert.equal(got.total, 4, "the listed capacity stays four");
+      }
     } else assert.deepEqual(tables, [], "private rematch never becomes discoverable");
     const http = await fetch(`http://127.0.0.1:${rematchPort}/tables`);
     assert.equal(http.status, 200, "HTTP listing succeeds without masking the result with rate limiting");
