@@ -243,6 +243,9 @@ for (const type of ["create", "join"]) {
   const guestSaved = await roomWhere(guest.code, (r) => r.seats.some((s) => s.id === guest.you), `${type} guest saved`);
   check(`${type} guest retry persists no profile binding`, !("profileId" in guestSaved.seats.find((s) => s.id === guest.you)));
 }
+// #944: one live table per host player. The alias table is done with, so Ember's profile is free to host the next one.
+await aliasJoin.close();
+await aliasHost.close();
 
 // A one-human bot game is frozen as not eligible.
 const solo = await client(h);
