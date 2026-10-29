@@ -75,12 +75,72 @@ try{
    await page.keyboard.press('Escape');
    await load(stages.zero[i],i);assert.equal(await page.getByTestId('hidden-point-hint').textContent(),hint);
    await load(stages.over[i],i);await page.getByTestId('win-screen').waitFor();
-   for(let p=0;p<4;p++){const cells=await page.locator(`[data-testid="win-row"][data-player="p${p}"] td`).allTextContents();assert.equal(cells[5],String(expected[p].hidden));}
+   for(let p=0;p<4;p++){
+    const row=page.locator(`[data-testid="win-row"][data-player="p${p}"]`);
+    if(width<1000){ // #748: phones show compact summaries; the hidden points sit in the expanded breakdown.
+     await row.getByTestId('win-toggle').click();
+     assert.equal(await row.locator('[data-component="hidden"]').getAttribute('data-points'),String(expected[p].hidden));
+    }else{const cells=await row.locator('td').allTextContents();assert.equal(cells[5],String(expected[p].hidden));}
+   }
    await page.getByTestId('win-look').click();
    await page.locator('[data-menu-trigger="p1"]').click();assert.equal(await page.getByTestId('private-points').textContent(),'1');await page.keyboard.press('Escape');
   }
   await page.screenshot({path:`test-results/public-score-${width}.png`});await context.close();
   console.log(`ok ${width}x${height}${reduced?' reduced':''}: four seats + watcher; public components reconcile; live updates; own-only hidden points; identical zero/many reminder; full end reveal`);
+ }
+ // #748: compact phone results at four phone sizes (touch), then the desktop table.
+ const final=stages.over[0].game,rank=final.players.map(p=>({id:p.id,total:publicVP(final,p.id)+p.hidden.vp,parts:publicScoreBreakdown(final,p.id),hidden:p.hidden.vp}));
+ const order=[...rank].sort((a,b)=>Number(b.id===final.winner)-Number(a.id===final.winner)||b.total-a.total).map(r=>r.id);
+ for(const [width,height] of [[390,844],[844,390],[440,956],[956,440],[1280,720]]){
+  const phone=width<1000;
+  const context=await browser.newContext({viewport:{width,height},hasTouch:phone,isMobile:phone});
+  const page=await context.newPage();page.on('pageerror',e=>errors.push(e.message));page.on('console',m=>m.type()==='error'&&errors.push(m.text()));
+  await page.goto(`http://127.0.0.1:${port}`);await page.waitForFunction(()=>window.__emberisle);
+  const longName='Moss the Extraordinarily Long-Named Wanderer of the Eastern Isles';
+  await page.evaluate(({view,longName})=>{const s=window.__emberisle;s.setState({mode:'online',seats:[{id:'s0',name:'Ember',host:true},{id:'s1',name:'Tide',host:false}],spectator:false,menuFor:null,chatOpen:false,code:'PSAA',seatId:'s0'});const g=structuredClone(view.game);g.players[3].name=longName;s.getState().loadState(g,view.you??'',true,'PSAA');},{view:stages.over[0],longName});
+  const screen=page.getByTestId('win-screen');await screen.waitFor();
+  const inView=async(loc,what)=>{await loc.scrollIntoViewIfNeeded();const b=await loc.boundingBox();assert.ok(b&&b.x>=0&&b.y>=0&&b.x+b.width<=width+0.5&&b.y+b.height<=height+0.5,`${what} outside ${width}x${height}: ${JSON.stringify(b)}`);return b;};
+  await inView(screen.locator('> div'),'panel');
+  assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'page scrolls horizontally');
+  if(!phone){
+   assert.equal(await page.getByTestId('win-compact').count(),0);assert.equal(await page.locator('[data-testid="win-screen"] table').count(),1);
+   assert.equal(await page.getByTestId('win-row').count(),4);console.log(`ok ${width}x${height}: desktop table retained`);await context.close();continue;
+  }
+  assert.equal(await page.locator('[data-testid="win-screen"] table').count(),0);
+  const wrap=page.getByTestId('win-table-wrap'),dims=await wrap.evaluate(el=>({sw:el.scrollWidth,cw:el.clientWidth}));
+  assert.ok(dims.sw<=dims.cw+1,`results scroll horizontally ${dims.sw}>${dims.cw}`);
+  const rows=page.getByTestId('win-row');assert.equal(await rows.count(),4);
+  assert.deepEqual(await rows.evaluateAll(n=>n.map(r=>r.dataset.player)),order);
+  assert.equal(await page.getByTestId('win-detail').count(),0);
+  const name3=page.locator('[data-testid="win-row"][data-player="p3"] [data-testid="win-toggle"] span').nth(1);
+  for(const id of order){
+   const row=page.locator(`[data-testid="win-row"][data-player="${id}"]`),toggle=row.getByTestId('win-toggle'),r=rank.find(x=>x.id===id);
+   const tb=await inView(toggle,`summary ${id}`);assert.ok(tb.height>=44,`target ${tb.height}px`);
+   const total=await inView(row.getByTestId('win-total'),`total ${id}`);assert.equal(await row.getByTestId('win-total').textContent(),String(r.total));
+   const name=await row.locator('span').nth(1).boundingBox();assert.ok(name.x+name.width<=total.x+0.5,'name overlaps total');
+   assert.equal(await toggle.getAttribute('aria-expanded'),'false');assert.equal(await row.getByTestId('win-detail').count(),0);
+   await toggle.click(); // tap
+   assert.equal(await toggle.getAttribute('aria-expanded'),'true');
+   const parts=await row.locator('[data-component]').evaluateAll(n=>Object.fromEntries(n.map(x=>[x.dataset.component,Number(x.dataset.points)])));
+   assert.deepEqual(parts,{...r.parts,hidden:r.hidden});assert.equal(Object.values(parts).reduce((a,b)=>a+b,0),r.total);
+   const text=await row.getByTestId('win-detail').textContent();
+   for(const k of ['outpost','stronghold','Longest path','Largest army','Revealed hidden points'])assert.ok(text.includes(k),`${id} detail lacks ${k}`);
+   assert.ok(text.includes(`${r.parts.strongholds/2} stronghold`)&&text.includes(`${r.parts.strongholds} point`),`${id} stronghold count/points`);
+   await inView(row.getByTestId('win-detail'),`detail ${id}`);
+   await toggle.focus();await page.keyboard.press('Enter'); // keyboard collapse
+   assert.equal(await toggle.getAttribute('aria-expanded'),'false');assert.equal(await row.getByTestId('win-detail').count(),0);
+   await page.keyboard.press('Space');assert.equal(await toggle.getAttribute('aria-expanded'),'true'); // keyboard expand
+   await page.keyboard.press('Space');assert.equal(await toggle.getAttribute('aria-expanded'),'false');
+  }
+  assert.ok(/Extraordinarily/.test(await name3.textContent()));
+  for(const t of ['win-look','win-again','win-menu'])await inView(page.getByTestId(t),t);
+  // Focus stays trapped, and Look around / Show scores still work.
+  for(let i=0;i<14;i++){await page.keyboard.press('Tab');assert.ok(await page.evaluate(()=>document.querySelector('[data-testid="win-screen"]').contains(document.activeElement)),'focus escaped');}
+  await page.getByTestId('win-look').click();await page.getByTestId('win-show').click();await screen.waitFor();
+  await page.evaluate(()=>window.__emberisle.setState({seatId:'s1'})); // a non-host seat gets no rematch
+  await page.getByTestId('win-waiting').waitFor();assert.equal(await page.getByTestId('win-again').count(),0);await inView(page.getByTestId('win-menu'),'win-menu');
+  await page.screenshot({path:`test-results/public-score-compact-${width}x${height}.png`});await context.close();
+  console.log(`ok ${width}x${height} touch: compact summaries, no sideways scroll, ${rank.length} players expand by tap and keyboard, components reconcile with totals`);
  }
  assert.equal(hint,'Hidden fortunes may add points.');assert.deepEqual(errors,[]);console.log('public-score-prove: all passed');
 }finally{await browser?.close();await vite.close();for(const ws of sockets)ws.terminate();host?.kill('SIGKILL');rmSync(dir,{recursive:true,force:true});}

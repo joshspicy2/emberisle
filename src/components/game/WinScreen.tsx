@@ -2,9 +2,10 @@ import { useEffect, useRef, useState } from "react";
 import { VictoryTargetSelect } from "@/components/game/VictoryTargetSelect";
 import { Button } from "@/components/ui/button";
 import { SeatDot } from "@/components/game/SeatDot";
-import { totalVP, victoryTarget } from "@/lib/game/rules";
+import { publicScoreBreakdown, totalVP, victoryTarget } from "@/lib/game/rules";
 import { useGame } from "@/lib/game/store";
 import { useViewport } from "@/lib/viewport";
+import { POINTS } from "@/lib/game/types";
 import { useFocusTrap } from "@/lib/focus-trap";
 
 // Build bible 4.7: the island stays visible. "Look around" hides the panel and leaves a small chip.
@@ -31,6 +32,13 @@ function Panel() {
   const canAgain = mode === "hotseat" || (mode === "online" && isHost);
   const waiting = mode === "online" && !isHost && !spectator && hostName;
   const [hidden, setHidden] = useState(false);
+  const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
+  const toggle = (id: string) =>
+    setExpanded((o) => {
+      const n = new Set(o);
+      if (!n.delete(id)) n.add(id);
+      return n;
+    });
   const winner = state.players.find((p) => p.id === state.winner)!;
   const dialog = useRef<HTMLDivElement>(null);
   const chip = useRef<HTMLDivElement>(null);
@@ -133,7 +141,48 @@ function Panel() {
         </p>
         <div className="win-equation" data-testid="win-reason">{contribution.map((part, i) => <span key={part}>{i > 0 ? "+ " : ""}{part}</span>)}</div>
         <div data-testid="win-table-wrap" className="mt-4 short:mt-1.5 min-h-0 overflow-auto">
-          <table className="w-full min-w-0 border-collapse text-sm">
+          {phone ? (
+            <ul data-testid="win-compact" className="m-0 list-none p-0 text-left">
+              {rows.map((r) => {
+                const open = expanded.has(r.p.id);
+                const pts = publicScoreBreakdown(state, r.p.id);
+                const parts: [string, string, number][] = [
+                  ["outposts", `${r.outposts} outpost${r.outposts === 1 ? "" : "s"}`, pts.outposts],
+                  ["strongholds", `${r.strongholds} stronghold${r.strongholds === 1 ? "" : "s"}`, pts.strongholds],
+                  ["longestPath", `Longest path${r.path ? "" : " (not held)"}`, pts.longestPath],
+                  ["largestArmy", `Largest army${r.army ? "" : " (not held)"}`, pts.largestArmy],
+                  ["hidden", "Revealed hidden points", r.hiddenVp * POINTS.pointsFortune],
+                ];
+                return (
+                  <li key={r.p.id} data-testid="win-row" data-player={r.p.id} className="border-t border-border">
+                    <button
+                      type="button"
+                      data-testid="win-toggle"
+                      aria-expanded={open}
+                      aria-controls={`win-detail-${r.p.id}`}
+                      onClick={() => toggle(r.p.id)}
+                      className="flex min-h-11 w-full items-center gap-2 px-1 py-1 text-left"
+                    >
+                      <SeatDot color={r.p.color} className="size-3 shrink-0" />
+                      <span className="min-w-0 flex-1 truncate font-medium">{r.p.name}</span>
+                      <span data-testid="win-total" className="font-medium tabular-nums">{r.total}</span>
+                      <span aria-hidden="true" className="w-4 text-center text-muted">{open ? "-" : "+"}</span>
+                    </button>
+                    {open ? (
+                      <dl id={`win-detail-${r.p.id}`} data-testid="win-detail" className="m-0 px-1 pb-2 text-sm">
+                        {parts.map(([key, label, points]) => (
+                          <div key={key} data-component={key} data-points={points} className="flex justify-between gap-2 py-0.5">
+                            <dt className="min-w-0 break-words text-zinc-600">{label}</dt>
+                            <dd className="m-0 whitespace-nowrap font-medium tabular-nums">{points === 1 ? "1 point" : `${points} points`}</dd>
+                          </div>
+                        ))}
+                      </dl>
+                    ) : null}
+                  </li>
+                );
+              })}
+            </ul>
+          ) : (          <table className="w-full min-w-0 border-collapse text-sm">
             <thead>
               <tr>
                 <th className={`${head} text-left whitespace-nowrap`}>Player</th>
@@ -179,6 +228,7 @@ function Panel() {
               ))}
             </tbody>
           </table>
+          )}
         </div>
         {waiting ? (
           <p data-testid="win-waiting" className="mt-4 text-sm text-zinc-600">
