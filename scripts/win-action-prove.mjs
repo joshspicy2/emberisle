@@ -96,11 +96,13 @@ try{
    const wrapBox=await wrap.boundingBox();
    const dims=await wrap.evaluate(el=>({scrollHeight:el.scrollHeight,clientHeight:el.clientHeight,scrollWidth:el.scrollWidth,clientWidth:el.clientWidth}));
    assert.ok(dims.scrollWidth<=dims.clientWidth+1,`table must not scroll horizontally: scrollWidth ${dims.scrollWidth} <= clientWidth ${dims.clientWidth}`);
-   if(height<=480){
+   const compact=await page.getByTestId('win-compact').count()>0; // #748: phone summaries scroll vertically instead of fitting
+   if(height<=480&&!compact){
     assert.ok(dims.scrollHeight<=dims.clientHeight,`table must not scroll vertically: scrollHeight ${dims.scrollHeight} <= clientHeight ${dims.clientHeight}`);
    }
    const rows=await page.getByTestId('win-row').all();assert.equal(rows.length,4);
    for(const r of rows){
+    if(compact)await r.scrollIntoViewIfNeeded();
     const b=await r.boundingBox();
     if(height<=480)assert.ok(b&&b.y>=wrapBox.y&&b.y+b.height<=wrapBox.y+wrapBox.height+1,`row must fit within table wrap`);
     assert.ok(b&&b.y>=0&&b.y+b.height<=height,`row must fit within viewport height ${height}`);
