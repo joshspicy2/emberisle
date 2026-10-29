@@ -244,6 +244,14 @@ export function connectTable(url: string, on: Partial<TableEvents>, Socket?: Soc
   let rejoining = false;
   // The last rejoin answer was "Seat is taken.": another tab of ours holds the seat, so giving up must keep the secret.
   let taken = false;
+  // #944: the seat bearers this browser was given by this one host, kept under this host's address and sent only back to
+  // it on a create, so the host can tell whether we hold the host seat of a live table now (a handoff can give it to any
+  // of our seats). Never another host's, never savedSeat. The host counts only a current host seat and reads at most 64;
+  // blocked storage only costs the hint.
+  const hostKey = "emberisle-host-seats:" + url;
+  const hostSeats = (): string[] => {
+    try { return JSON.parse(localStorage.getItem(hostKey)!) || []; } catch { return []; }
+  };
   let timer: ReturnType<typeof setTimeout> | null = null;
   let stamp: ActionStamp | null = null;
   let extension: TurnExtensionState | null = null;
@@ -374,7 +382,10 @@ export function connectTable(url: string, on: Partial<TableEvents>, Socket?: Soc
       case "welcome": {
         stamp = null;
         const m = msg as Parameters<TableEvents["welcome"]>[0];
-        if (typeof m.secret === "string") seat = { code: m.code, secret: m.secret };
+        if (typeof m.secret === "string") {
+          seat = { code: m.code, secret: m.secret };
+          try { localStorage.setItem(hostKey, JSON.stringify([...new Set([...hostSeats(), m.secret])].slice(-64))); } catch {}
+        }
         if (typeof m.holdMs === "number" && typeof m.lobbyHoldMs === "number") hold = { game: m.holdMs, lobby: m.lobbyHoldMs };
         awaitingState = rejoining && inGame;
         probe ??= null;
@@ -447,7 +458,7 @@ export function connectTable(url: string, on: Partial<TableEvents>, Socket?: Soc
   dial();
 
   return {
-    open: (me, options) => send({ type: "hello", proto: PROTO, ...me, ...options }),
+    open: (me, options) => send({ type: "hello", proto: PROTO, ...me, ...options, hostSeats: hostSeats() }),
     join: (code, me) => send({ type: "hello", proto: PROTO, code: code.toUpperCase(), ...me }),
     watch: (code) => send({ type: "hello", proto: PROTO, code: code.toUpperCase(), watch: true }),
     peek: (code) => send({ type: "peek", code: code.toUpperCase() }),

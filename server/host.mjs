@@ -916,12 +916,39 @@ function seatColor(room, raw) {
   return PLAYER_COLORS.find((c) => !room.seats.some((s) => s.color === c));
 }
 
+// #944: does this player hold the host seat of a live table (open or private)? Identity is the current host seat,
+// never who created the room: handOffHost moves it, and a seat that left is no longer in the room. A finished game or a
+// room with nobody connected never counts. A verified profile is matched by profileId alone, so remembered bearers of
+// another profile's seats in the same browser never block it. A guest is matched by the seat bearers its browser kept
+// for this host (`hostSeats`), each checked with seatOf like any secret; only a bearer whose seat holds the host role
+// counts, so a guest seat that inherits it binds its player. A raw profile id is never read here.
+const HOST_SEATS_MAX = 64;
+function hostsLiveTable(profile, hostSeats) {
+  const mine = new Set();
+  if (!profile && Array.isArray(hostSeats)) {
+    for (const secret of hostSeats.slice(0, HOST_SEATS_MAX)) {
+      if (typeof secret !== "string" || !/^[a-f0-9]{32}$/.test(secret)) continue;
+      const found = seatOf(secret);
+      if (found) mine.add(found.seat);
+    }
+  }
+  for (const room of rooms.values()) {
+    if (room.game?.phase === "over" || !room.seats.some((s) => s.ws)) continue;
+    const holder = room.seats.find((s) => s.id === room.host);
+    if (!holder) continue;
+    if (profile ? holder.profileId === profile.profileId : mine.has(holder)) return true;
+  }
+  return false;
+}
+
 function openTable(ws, msg) {
   if (msg.wayfarerMode !== undefined && !["on", "off"].includes(msg.wayfarerMode)) return send(ws, { type: "error", message: "Choose Wayfarer On or Off." });
   if (rooms.size >= ROOM_MAX) return send(ws, { type: "error", message: "The host is full." });
   // An optional profile, verified before the table opens; a refusal opens nothing (#764).
   const profile = seatCredential(profiles, ws, msg, () => false);
   if (profile?.code) return send(ws, { type: "error", ...profile });
+  // #944: one live table per host player. Refused before the rate limits, so a refusal spends no token.
+  if (hostsLiveTable(profile, msg.hostSeats)) return send(ws, { type: "error", message: "You're already hosting a table." });
   const now = Date.now();
   const mine = ws.ipKey ? ipBucket(ws.ipKey, now) : null;
   if (mine && !allow(mine, now, OPEN_IP_CAP, 1000 / OPEN_IP_MS)) return send(ws, { type: "error", message: "You have opened several tables lately. Try again in a minute." });
@@ -947,10 +974,7 @@ function openTable(ws, msg) {
   };
   room.seats.push(seat);
   room.host = seat.id;
-  if (visibility === "open" && !registerOpenTable(room)) {
-    rooms.delete(room.code);
-    return send(ws, { type: "error", message: "An open table is already listed." });
-  }
+  if (visibility === "open") registerOpenTable(room);
   ws.room = room;
   ws.seat = seat;
   send(ws, { type: "welcome", proto: PROTO, serverSha: SERVER_SHA, code: room.code, you: seat.id, host: true, chat: room.chat, secret: seat.secret, ...HOLD_INFO, victoryTarget: room.victoryTarget ?? room.game?.victoryTarget ?? 10, wayfarerMode: room.wayfarerMode ?? room.game?.wayfarerMode ?? "on" });
