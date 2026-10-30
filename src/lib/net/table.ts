@@ -1,5 +1,5 @@
 // The browser (or a Node proof) talking to server/host.mjs. Design: docs/design/online-client.md.
-import type { Action, GameState, Resource, VictoryTarget, WayfarerMode } from "@/lib/game/types";
+import type { Action, GameState, NumberTokens, Resource, VictoryTarget, WayfarerMode } from "@/lib/game/types";
 import { PROTO } from "@/lib/net/proto";
 
 export interface Seat {
@@ -80,9 +80,9 @@ export interface TableEvents {
   // A watcher's welcome (docs/design/spectator.md) has `spectator: true` and no `you`, `host` or `secret`. `proto` is the
   // host's wire protocol (G2): newer than PROTO means this page is out of date.
   // `holdMs`/`lobbyHoldMs`: how long the host holds this seat after a drop, in a game and in the lobby (G7).
-  welcome(msg: { proto?: number; serverSha?: string; code: string; you?: string; host?: boolean; chat?: ChatLine[]; secret?: string; spectator?: true; holdMs?: number; lobbyHoldMs?: number; victoryTarget?: VictoryTarget; wayfarerMode?: WayfarerMode }): void;
-  // `watching`: how many spectators the table has (#347).
-  seats(msg: { code: string; seats: Seat[] | PeekSeat[]; watching?: number; victoryTarget?: VictoryTarget; wayfarerMode?: WayfarerMode }): void;
+  welcome(msg: { proto?: number; serverSha?: string; code: string; you?: string; host?: boolean; chat?: ChatLine[]; secret?: string; spectator?: true; holdMs?: number; lobbyHoldMs?: number; victoryTarget?: VictoryTarget; wayfarerMode?: WayfarerMode; numberTokens?: NumberTokens }): void;
+  // `watching`: how many spectators the table has (#347). `numberTokens`: the table's dealing setting (#1156).
+  seats(msg: { code: string; seats: Seat[] | PeekSeat[]; watching?: number; victoryTarget?: VictoryTarget; wayfarerMode?: WayfarerMode; numberTokens?: NumberTokens }): void;
   // `you` is null on a watcher's state. `turnDeadline` is the host's clock (epoch ms) for the seat `turnPlayer`;
   // `serverNow` is the host's clock as it sent this.
   state(msg: { you: string | null; game: GameState; legal: Legal; actionStamp?: ActionStamp; turnDeadline?: number | null; turnPlayer?: string | null; serverNow?: number }): void;
@@ -133,6 +133,8 @@ export interface TableClient {
   ready(value: boolean): void;
   start(): void;
   setVictoryTarget(value: VictoryTarget): void;
+  // Lobby (or a finished game), host only: Official spiral or Random number tokens for the next deal (#1156).
+  setNumberTokens(value: NumberTokens): void;
   // Lobby: change your own seat's name; the host cleans it and answers with `seats`.
   rename(name: string): void;
   // Lobby, host only: seat a practice bot, or take the bot at seat `id` out.
@@ -462,6 +464,7 @@ export function connectTable(url: string, on: Partial<TableEvents>, Socket?: Soc
     ready: (value) => send({ type: "ready", value }),
     start: () => send({ type: "start" }),
     setVictoryTarget: (value) => send({ type: "setVictoryTarget", value }),
+    setNumberTokens: (value) => send({ type: "setNumberTokens", value }),
     rename: (name) => send({ type: "rename", name }),
     addBot: () => send({ type: "addBot" }),
     removeBot: (id) => send({ type: "removeBot", id }),

@@ -20,6 +20,8 @@ const openTables = chunk(() => import("@/components/game/OpenTables"));
 export const OpenTables = openTables.pick((m) => m.OpenTables);
 export const OpenModeToggle = openTables.pick((m) => m.OpenModeToggle);
 export const SetupReference = chunk(() => import("@/components/game/SetupReference")).pick(m => m.SetupReference);
+// #1156: the number tokens line of How to play, the host's choice in the lobby.
+export const NumberTokensSetting = chunk(() => import("@/components/game/NumberTokensSetting")).pick(m => m.NumberTokensSetting);
 export const WayfarerOptions = chunk(() => import("@/components/game/WayfarerOptions")).pick(m => m.WayfarerOptions);
 
 export const sheets = chunk(() => import("@/components/game/sheets"));

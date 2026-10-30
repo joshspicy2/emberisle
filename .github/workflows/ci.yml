@@ -445,6 +445,8 @@ jobs:
         run: npm run wayfarer-setup-prove
       - if: needs.changes.outputs.docs_only != 'true' && matrix.suite == 'flows-b'
         run: npm run victory-target-prove
+      - if: needs.changes.outputs.docs_only != 'true' && matrix.suite == 'flows-b'
+        run: npm run number-tokens-prove
       - if: needs.changes.outputs.docs_only != 'true' && matrix.suite == 'flows-c'
         run: npm run watch-ui-prove
       - if: needs.changes.outputs.docs_only != 'true' && matrix.suite == 'flows-a'

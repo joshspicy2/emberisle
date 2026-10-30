@@ -104,6 +104,8 @@ export interface TradeOffer {
 
 export type WayfarerMode = "on" | "off";
 export type VictoryTarget = 7 | 10;
+// #1156: how the number tokens are dealt (the generator's `numberTokens` option); an online table's match setting.
+export type NumberTokens = "official" | "random";
 export type WinTrigger = "outpost" | "stronghold" | "longestPath" | "largestArmy" | "pointFortune" | "turnStart" | "points";
 
 export interface GameState {

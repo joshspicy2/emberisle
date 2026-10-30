@@ -5,15 +5,14 @@ import { wayfarerRules } from "@/lib/game/fortunes";
 import { victoryTarget } from "@/lib/game/rules";
 import { useGame } from "@/lib/game/store";
 import { play } from "@/lib/sound";
-import { SetupReference } from "@/components/game/chunks";
+import { NumberTokensSetting, SetupReference } from "@/components/game/chunks";
 import { useViewport } from "@/lib/viewport";
 
 // A modal dialog: focus goes to Close on open and back to whatever opened it on close; Escape closes it (see useEscapeDisarm for the order).
 export function HowTo({ onClose }: { onClose: () => void }) {
   const phone = useViewport().phone;
   const mode = useGame(s => s.state?.wayfarerMode ?? "on");
-  const target = useGame(s => s.state ? victoryTarget(s.state) : s.screen === "lobby" ? s.tableVictoryTarget : 10);
-  const closeRef = useRef<HTMLButtonElement>(null);
+  const target = useGame(s => s.state ? victoryTarget(s.state) : s.screen === "lobby" ? s.tableVictoryTarget : 10);  const closeRef = useRef<HTMLButtonElement>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
@@ -66,6 +65,8 @@ export function HowTo({ onClose }: { onClose: () => void }) {
           className="min-h-0 flex-1 space-y-3 overflow-y-auto rounded-sheet px-5 pb-5 pt-3 text-sm leading-relaxed text-zinc-600 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-[var(--ink)]"
         >
           <p>Win at {target} points.</p>
+          {/* #1156: the table's number tokens; the lobby host chooses here. */}
+          <Suspense fallback={null}><NumberTokensSetting /></Suspense>
           <p>Each turn: roll. Matching numbers pay goods from tiles you touch. {wayfarerRules(mode)}</p>
           <p>Build paths (wood + brick), outposts (wood, brick, sheep, wheat), strongholds (three wheat, two stone). Fortunes cost sheep, wheat, stone.</p>
           <p>Outposts score 1, strongholds 2. Longest path of five and largest army of three wayfarer cards score 2 more. Docks cut bank trade to 3:1 or 2:1.</p>

@@ -206,7 +206,7 @@ function withPaths(state: GameState, edgeIds: string[], pid: string): GameState 
   return { ...state, edges: state.edges.map((e) => (edgeIds.includes(e.id) ? { ...e, path: pid } : e)) };
 }
 import { chooseBotAction, chooseTradeAsk, shouldAcceptTrade } from "./ai";
-import { PLAYER_COLORS, RESOURCES, type Action, type BuildMode, type GameState, type VictoryTarget, type WayfarerMode } from "./types";
+import { PLAYER_COLORS, RESOURCES, type Action, type BuildMode, type GameState, type NumberTokens, type VictoryTarget, type WayfarerMode } from "./types";
 import type { Bag, ChatLine, Legal, Me, Reaction, Seat, TableClient } from "@/lib/net/table";
 import { chunk } from "@/lib/lazy";
 import { PROTO } from "@/lib/net/proto";
@@ -333,6 +333,9 @@ interface GameStore {
   isHost: boolean;
   tableVictoryTarget: VictoryTarget;
   setVictoryTarget: (value: VictoryTarget) => void;
+  // #1156: the online table's number tokens, as the host last said; the host alone may change it, in the lobby.
+  tableNumberTokens: NumberTokens;
+  setNumberTokens: (value: NumberTokens) => void;
   seats: Seat[];
   legal: Legal | null;
   // The host's turn timer (#344): when it fires on this tab's clock, whose seat it is, and the host's own value
@@ -519,6 +522,7 @@ export const useGame = create<GameStore>((set, get) => ({
   code: "",
   isHost: false,
   tableVictoryTarget: 10,
+  tableNumberTokens: "official",
   seats: [],
   legal: null,
   turnTimer: null,
@@ -910,6 +914,9 @@ export const useGame = create<GameStore>((set, get) => ({
   setVictoryTarget: (value) => {
     if (!get().spectator) get().net?.setVictoryTarget(value);
   },
+  setNumberTokens: (value) => {
+    if (!get().spectator) get().net?.setNumberTokens(value);
+  },
   setReady: (value) => {
     if (!get().spectator) get().net?.ready(value);
   },
@@ -1159,13 +1166,13 @@ async function connect(set: Set, get: Get, first: (t: TableClient, me: Me) => vo
       if (recovery && (get().restoring || get().state !== null) && connectionHealth.status === "Reachable") return;
       set({ connectionHealth });
     },
-    welcome: ({ proto, serverSha, code, you, host, chat, secret, spectator, victoryTarget, wayfarerMode }) => {
+    welcome: ({ proto, serverSha, code, you, host, chat, secret, spectator, victoryTarget, wayfarerMode, numberTokens }) => {
       pending = false;
       welcomed = true;
       firstState = true;
       // G2: a host on a newer wire protocol than this page says so where errors go, and keeps saying it after every state.
       outdated = (proto ?? 0) > PROTO ? "This page is out of date. Reload to update." : null;
-      set({ serverSha: typeof serverSha === "string" && /^(?:[a-f0-9]{7,40}|dev)$/.test(serverSha) ? serverSha : null, resync: true, tableVictoryTarget: victoryTarget === 7 ? 7 : 10, tableWayfarerMode: wayfarerMode ?? "on" });
+      set({ serverSha: typeof serverSha === "string" && /^(?:[a-f0-9]{7,40}|dev)$/.test(serverSha) ? serverSha : null, resync: true, tableVictoryTarget: victoryTarget === 7 ? 7 : 10, tableWayfarerMode: wayfarerMode ?? "on", tableNumberTokens: numberTokens === "random" ? "random" : "official" });
       if (secret) rememberSeat({ code, secret });
       // A page-load rejoin has no state yet, so it passes through the lobby until the host's state push moves it to play.
       // A mid-game reconnect already holds the game: stay on the board so the HUD keeps its local state.
@@ -1224,12 +1231,12 @@ async function connect(set: Set, get: Get, first: (t: TableClient, me: Me) => vo
       setTimeout(() => set({ reactions: get().reactions.filter((x) => x !== r) }), 2000);
     },
     // A peek answers id/color/ready only (G10); the lobby is not shown until the full broadcast after sitting replaces it.
-    seats: ({ code, seats, watching, victoryTarget, wayfarerMode }) => {
+    seats: ({ code, seats, watching, victoryTarget, wayfarerMode, numberTokens }) => {
       const before = get().seats;
       const after = seats as Seat[];
       const me = get().localId;
       void tradeSounds.then(({ diggerBell }) => diggerBell(play, before, after, me));
-      set({ code, seats: seats as Seat[], watching: watching ?? 0, tableVictoryTarget: victoryTarget === 7 ? 7 : 10, tableWayfarerMode: wayfarerMode ?? "on" });
+      set({ code, seats: seats as Seat[], watching: watching ?? 0, tableVictoryTarget: victoryTarget === 7 ? 7 : 10, tableWayfarerMode: wayfarerMode ?? "on", tableNumberTokens: numberTokens === "random" ? "random" : "official" });
     },
     // Dice and gain floats present the roll; its words live only in the persistent log.
     rolled: () => {},
